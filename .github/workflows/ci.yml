@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, trunk ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint-fmt:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run unit tests
+        run: cargo test --lib
+
+      - name: Run integration tests
+        run: cargo test --test '*'
+
+  conformance:
+    name: Conformance Tests (allowed to fail)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build server
+        run: cargo build
+
+      - name: Start server
+        run: cargo run &
+        env:
+          RUST_LOG: info
+
+      - name: Wait for server health check
+        run: |
+          timeout 30 sh -c 'until curl -s http://localhost:4437/healthz > /dev/null; do sleep 1; done' || exit 1
+
+      - name: Run conformance tests
+        run: |
+          npx @durable-streams/server-conformance-tests@0.2.1 --run http://localhost:4437/v1/stream
+
+  governance:
+    name: Governance Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required governance files exist
+        run: |
+          echo "Checking governance files..."
+          test -f SPEC_VERSION.md || (echo "Missing SPEC_VERSION.md" && exit 1)
+          test -f docs/protocol-governance.md || (echo "Missing docs/protocol-governance.md" && exit 1)
+          test -f docs/blocker-policy.md || (echo "Missing docs/blocker-policy.md" && exit 1)
+          test -f docs/compatibility.md || (echo "Missing docs/compatibility.md" && exit 1)
+          test -f docs/decisions.md || (echo "Missing docs/decisions.md" && exit 1)
+          test -f docs/gaps.md || (echo "Missing docs/gaps.md" && exit 1)
+          echo "All governance files present"
+
+      - name: Verify SPEC_VERSION.md has SHA
+        run: |
+          echo "Checking SPEC_VERSION.md contains spec SHA..."
+          grep -q "Pinned Commit SHA:" SPEC_VERSION.md || (echo "SPEC_VERSION.md missing spec SHA" && exit 1)
+          grep -q "Version:" SPEC_VERSION.md || (echo "SPEC_VERSION.md missing conformance version" && exit 1)
+          echo "SPEC_VERSION.md valid"
