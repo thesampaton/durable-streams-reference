@@ -86,6 +86,7 @@ pub async fn read_stream<S: Storage>(
             read_result.next_offset.to_string().parse().unwrap(),
         );
         response_headers.insert(names::STREAM_UP_TO_DATE, "true".parse().unwrap());
+        response_headers.insert("cache-control", "no-store".parse().unwrap());
         return Ok((StatusCode::NOT_MODIFIED, response_headers).into_response());
     }
 

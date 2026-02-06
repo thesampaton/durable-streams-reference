@@ -84,6 +84,7 @@ pub async fn append_data<S: Storage>(
                     names::STREAM_NEXT_OFFSET,
                     metadata.next_offset.to_string().parse().unwrap(),
                 );
+                error_headers.insert("cache-control", "no-store".parse().unwrap());
                 return Ok(
                     (StatusCode::CONFLICT, error_headers, "Stream is closed").into_response()
                 );
@@ -103,6 +104,7 @@ pub async fn append_data<S: Storage>(
         names::STREAM_NEXT_OFFSET,
         next_offset.to_string().parse().unwrap(),
     );
+    response_headers.insert("cache-control", "no-store".parse().unwrap());
 
     Ok((StatusCode::NO_CONTENT, response_headers).into_response())
 }

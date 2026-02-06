@@ -123,6 +123,9 @@ impl axum::response::IntoResponse for Error {
 
         let body = self.to_string();
 
-        (status, body).into_response()
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("cache-control", "no-store".parse().unwrap());
+
+        (status, headers, body).into_response()
     }
 }
