@@ -1,8 +1,5 @@
 use crate::{handlers, middleware, storage::Storage};
-use axum::{
-    Router, middleware as axum_middleware,
-    routing::{get, put},
-};
+use axum::{Router, middleware as axum_middleware, routing::get};
 use std::sync::Arc;
 
 /// Build the application router with storage state
@@ -23,7 +20,8 @@ fn protocol_routes<S: Storage + 'static>(storage: Arc<S>) -> Router {
     Router::new()
         .route(
             "/{name}",
-            put(handlers::put::create_stream::<S>)
+            get(handlers::get::read_stream::<S>)
+                .put(handlers::put::create_stream::<S>)
                 .head(handlers::head::stream_metadata::<S>)
                 .post(handlers::post::append_data::<S>),
         )
