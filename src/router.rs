@@ -23,7 +23,9 @@ fn protocol_routes<S: Storage + 'static>(storage: Arc<S>) -> Router {
     Router::new()
         .route(
             "/{name}",
-            put(handlers::put::create_stream::<S>).head(handlers::head::stream_metadata::<S>),
+            put(handlers::put::create_stream::<S>)
+                .head(handlers::head::stream_metadata::<S>)
+                .post(handlers::post::append_data::<S>),
         )
         .layer(axum_middleware::from_fn(
             middleware::security::add_security_headers,
