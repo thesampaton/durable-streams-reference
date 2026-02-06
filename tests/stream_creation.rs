@@ -514,3 +514,112 @@ async fn test_head_includes_closed_flag() {
         .unwrap();
     assert_eq!(closed, "true");
 }
+
+/// Validates spec: 01-stream-lifecycle.md#delete-stream
+///
+/// Verifies that DELETE returns 204 and removes stream.
+#[tokio::test]
+async fn test_delete_stream_returns_204() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create stream
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .send()
+        .await
+        .unwrap();
+
+    // Delete stream
+    let response = client
+        .delete(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 204, "Expected 204 No Content");
+
+    // Verify stream is deleted (HEAD should return 404)
+    let head_response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(head_response.status(), 404, "Expected 404 after deletion");
+}
+
+/// Validates spec: 01-stream-lifecycle.md#delete-stream
+///
+/// Verifies that DELETE is idempotent (returns 204 even if doesn't exist).
+#[tokio::test]
+async fn test_delete_nonexistent_returns_204() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Delete non-existent stream
+    let response = client
+        .delete(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 204, "Expected 204 for idempotent delete");
+}
+
+/// Validates spec: 01-stream-lifecycle.md#delete-stream
+///
+/// Verifies that stream can be recreated after deletion with different config.
+#[tokio::test]
+async fn test_recreate_after_delete_with_different_config() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create stream with text/plain
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .send()
+        .await
+        .unwrap();
+
+    // Delete stream
+    client
+        .delete(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    // Recreate with different content-type (should succeed)
+    let response = client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        201,
+        "Expected 201 for recreation with different config"
+    );
+
+    // Verify new content-type
+    let head_response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    let content_type = head_response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(content_type, "application/json");
+}
