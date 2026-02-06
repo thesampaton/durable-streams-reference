@@ -37,8 +37,6 @@ pub async fn stream_metadata<S: Storage>(
         names::STREAM_NEXT_OFFSET,
         metadata.next_offset.to_string().parse().unwrap(),
     );
-    headers.insert("cache-control", "no-store".parse().unwrap());
-
     // Include Stream-Closed if stream is closed
     if metadata.closed {
         headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());

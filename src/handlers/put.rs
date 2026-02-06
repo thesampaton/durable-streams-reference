@@ -143,8 +143,6 @@ pub async fn create_stream<S: Storage>(
         names::STREAM_NEXT_OFFSET,
         metadata.next_offset.to_string().parse().unwrap(),
     );
-    response_headers.insert("cache-control", "no-store".parse().unwrap());
-
     // Location header (only for 201 Created, but include for both per spec behavior)
     let location = format!("/v1/stream/{name}");
     response_headers.insert("location", location.parse().unwrap());

@@ -2,6 +2,7 @@ pub mod memory;
 
 use crate::protocol::error::Result;
 use crate::protocol::offset::Offset;
+use crate::protocol::producer::ProducerHeaders;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
@@ -108,6 +109,28 @@ pub struct StreamMetadata {
     pub created_at: DateTime<Utc>,
 }
 
+/// Result of an append with producer sequencing.
+///
+/// Includes a snapshot of stream state taken atomically with the operation
+/// so handlers never need a separate `head()` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProducerAppendResult {
+    /// New data accepted (200 OK)
+    Accepted {
+        epoch: u64,
+        seq: u64,
+        next_offset: Offset,
+        closed: bool,
+    },
+    /// Duplicate detected, data already persisted (204 No Content)
+    Duplicate {
+        epoch: u64,
+        seq: u64,
+        next_offset: Offset,
+        closed: bool,
+    },
+}
+
 /// Storage trait for stream persistence
 ///
 /// Methods are intentionally sync (not async) to keep the core logic simple.
@@ -138,7 +161,8 @@ pub trait Storage: Send + Sync {
     ///
     /// All messages are validated and committed as a single atomic operation.
     /// Either all messages are appended successfully, or none are.
-    /// Returns the offset of the last appended message.
+    /// Returns the next offset (the offset that will be assigned to the
+    /// next message appended after this batch).
     ///
     /// Returns `Err(Error::StreamClosed)` if stream is closed.
     /// Returns `Err(Error::ContentTypeMismatch)` if content type doesn't match.
@@ -170,6 +194,25 @@ pub trait Storage: Send + Sync {
     /// Returns `Ok(())` if already closed (idempotent).
     /// Returns `Err(Error::NotFound)` if stream doesn't exist.
     fn close_stream(&self, name: &str) -> Result<()>;
+
+    /// Append messages with producer sequencing (atomic validation + append)
+    ///
+    /// Validates producer epoch/sequence, appends data if accepted, and
+    /// optionally closes the stream — all within a single lock hold.
+    ///
+    /// Returns `ProducerAppendResult::Accepted` for new data (200 OK).
+    /// Returns `ProducerAppendResult::Duplicate` for already-seen seq (204).
+    /// Returns `Err(EpochFenced)` if epoch < current (403).
+    /// Returns `Err(SequenceGap)` if seq > expected (409).
+    /// Returns `Err(InvalidProducerState)` if epoch bump with seq != 0 (400).
+    fn append_with_producer(
+        &self,
+        name: &str,
+        messages: Vec<Bytes>,
+        content_type: &str,
+        producer: &ProducerHeaders,
+        should_close: bool,
+    ) -> Result<ProducerAppendResult>;
 
     /// Check if a stream exists
     fn exists(&self, name: &str) -> bool;
