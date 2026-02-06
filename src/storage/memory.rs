@@ -78,6 +78,15 @@ impl InMemoryStorage {
         let streams = self.streams.read().expect("streams lock poisoned");
         streams.get(name).map(Arc::clone)
     }
+
+    /// Check if a stream is expired based on its `expires_at` timestamp
+    fn is_expired(entry: &StreamEntry) -> bool {
+        if let Some(expires_at) = entry.config.expires_at {
+            Utc::now() >= expires_at
+        } else {
+            false
+        }
+    }
 }
 
 impl Storage for InMemoryStorage {
@@ -85,13 +94,30 @@ impl Storage for InMemoryStorage {
         let mut streams = self.streams.write().expect("streams lock poisoned");
 
         if let Some(stream_arc) = streams.get(name) {
-            // Stream exists, check for config match
+            // Stream exists, check if expired
             let stream = stream_arc.read().expect("stream lock poisoned");
-            if stream.config == config {
-                // Idempotent create with matching config
-                return Ok(());
+
+            if Self::is_expired(&stream) {
+                // Stream is expired, remove it and create new
+                // Capture bytes to reclaim from global counter
+                let stream_bytes = stream.total_bytes;
+                drop(stream); // Release read lock before modifying map
+                streams.remove(name);
+
+                // Reclaim memory from global counter
+                let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
+                *total = total.saturating_sub(stream_bytes);
+                drop(total); // Release lock before proceeding
+
+            // Fall through to create new stream
+            } else {
+                // Stream is not expired, check for config match
+                if stream.config == config {
+                    // Idempotent create with matching config
+                    return Ok(());
+                }
+                return Err(Error::ConfigMismatch);
             }
-            return Err(Error::ConfigMismatch);
         }
 
         // Create new stream
@@ -109,6 +135,11 @@ impl Storage for InMemoryStorage {
         // Acquire per-stream write lock to serialize appends and ensure monotonicity
         // This lock is held across offset generation and message insertion
         let mut stream = stream_arc.write().expect("stream lock poisoned");
+
+        // Check if stream is expired
+        if Self::is_expired(&stream) {
+            return Err(Error::StreamExpired);
+        }
 
         // Check if stream is closed
         if stream.closed {
@@ -162,6 +193,11 @@ impl Storage for InMemoryStorage {
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
 
         let stream = stream_arc.read().expect("stream lock poisoned");
+
+        // Check if stream is expired
+        if Self::is_expired(&stream) {
+            return Err(Error::StreamExpired);
+        }
 
         // Handle sentinels
         if from_offset.is_now() {
@@ -228,6 +264,11 @@ impl Storage for InMemoryStorage {
 
         let stream = stream_arc.read().expect("stream lock poisoned");
 
+        // Check if stream is expired
+        if Self::is_expired(&stream) {
+            return Err(Error::StreamExpired);
+        }
+
         Ok(StreamMetadata {
             config: stream.config.clone(),
             next_offset: Offset::new(stream.next_read_seq, stream.next_byte_offset),
@@ -244,6 +285,12 @@ impl Storage for InMemoryStorage {
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
+
+        // Check if stream is expired
+        if Self::is_expired(&stream) {
+            return Err(Error::StreamExpired);
+        }
+
         stream.closed = true;
 
         Ok(())
@@ -251,7 +298,13 @@ impl Storage for InMemoryStorage {
 
     fn exists(&self, name: &str) -> bool {
         let streams = self.streams.read().expect("streams lock poisoned");
-        streams.contains_key(name)
+        if let Some(stream_arc) = streams.get(name) {
+            let stream = stream_arc.read().expect("stream lock poisoned");
+            // Expired streams are treated as non-existent
+            !Self::is_expired(&stream)
+        } else {
+            false
+        }
     }
 }
 
