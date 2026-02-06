@@ -1,3 +1,5 @@
+use durable_streams_rust_server::storage::memory::InMemoryStorage;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::net::TcpListener;
 
@@ -9,7 +11,7 @@ static STREAM_COUNTER: AtomicU16 = AtomicU16::new(0);
 /// Uses a global atomic counter to ensure unique names across all tests.
 pub fn unique_stream_name() -> String {
     let id = STREAM_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("test-stream-{}", id)
+    format!("test-stream-{id}")
 }
 
 /// Spawn a test server on a random available port
@@ -24,8 +26,11 @@ pub async fn spawn_test_server() -> (String, u16) {
     let addr = listener.local_addr().expect("Failed to get local addr");
     let port = addr.port();
 
+    // Create storage with generous limits for testing
+    let storage = Arc::new(InMemoryStorage::new(1024 * 1024 * 100, 1024 * 1024 * 10));
+
     // Build and spawn server
-    let app = durable_streams_rust_server::router::build_router();
+    let app = durable_streams_rust_server::router::build_router(storage);
 
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -36,7 +41,7 @@ pub async fn spawn_test_server() -> (String, u16) {
     // Give the server a moment to start
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    (format!("http://127.0.0.1:{}", port), port)
+    (format!("http://127.0.0.1:{port}"), port)
 }
 
 /// Create an HTTP client for testing

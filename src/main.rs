@@ -1,4 +1,5 @@
-use durable_streams_rust_server::{config::Config, router};
+use durable_streams_rust_server::{config::Config, router, storage::memory::InMemoryStorage};
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -22,8 +23,14 @@ async fn main() {
         config.max_stream_bytes
     );
 
+    // Create storage
+    let storage = Arc::new(InMemoryStorage::new(
+        config.max_memory_bytes,
+        config.max_stream_bytes,
+    ));
+
     // Build router
-    let app = router::build_router();
+    let app = router::build_router(storage);
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(&addr)

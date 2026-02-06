@@ -114,3 +114,15 @@ impl Error {
 
 /// Result type alias for storage and protocol operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Convert Error to HTTP response
+impl axum::response::IntoResponse for Error {
+    fn into_response(self) -> axum::response::Response {
+        let status = axum::http::StatusCode::from_u16(self.status_code())
+            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = self.to_string();
+
+        (status, body).into_response()
+    }
+}
