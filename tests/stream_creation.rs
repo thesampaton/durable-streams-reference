@@ -353,3 +353,164 @@ async fn test_valid_ttl() {
 
     assert_eq!(response.status(), 201, "Expected 201 for valid TTL");
 }
+
+/// Validates spec: 01-stream-lifecycle.md#stream-metadata
+///
+/// Verifies that HEAD returns stream metadata with correct headers.
+#[tokio::test]
+async fn test_head_returns_metadata() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create stream
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    // HEAD request
+    let response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200, "Expected 200 OK");
+
+    // Verify headers
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("Missing Content-Type header")
+        .to_str()
+        .unwrap();
+    assert_eq!(content_type, "application/json");
+
+    let next_offset = response
+        .headers()
+        .get("Stream-Next-Offset")
+        .expect("Missing Stream-Next-Offset header")
+        .to_str()
+        .unwrap();
+    assert_eq!(next_offset, "0000000000000000_0000000000000000");
+
+    let cache_control = response
+        .headers()
+        .get("cache-control")
+        .expect("Missing Cache-Control header")
+        .to_str()
+        .unwrap();
+    assert_eq!(cache_control, "no-store");
+
+    // Stream-Closed should be absent (stream is open)
+    assert!(response.headers().get("Stream-Closed").is_none());
+
+    // Body should be empty (HEAD request)
+    let body_bytes = response.bytes().await.unwrap();
+    assert!(body_bytes.is_empty(), "HEAD response should have no body");
+}
+
+/// Validates spec: 01-stream-lifecycle.md#stream-metadata
+///
+/// Verifies that HEAD returns 404 for non-existent stream.
+#[tokio::test]
+async fn test_head_nonexistent_returns_404() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    let response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        404,
+        "Expected 404 for non-existent stream"
+    );
+}
+
+/// Validates spec: 01-stream-lifecycle.md#stream-metadata
+///
+/// Verifies that HEAD includes TTL metadata when stream has TTL.
+#[tokio::test]
+async fn test_head_includes_ttl_metadata() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create stream with TTL
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .header("Stream-TTL", "7200")
+        .send()
+        .await
+        .unwrap();
+
+    // HEAD request
+    let response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    // Should have Stream-TTL (remaining seconds)
+    let ttl = response
+        .headers()
+        .get("Stream-TTL")
+        .expect("Missing Stream-TTL header")
+        .to_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+    // TTL should be close to 7200 (within a second or two)
+    assert!(ttl >= 7198 && ttl <= 7200, "TTL should be close to 7200");
+
+    // Should have Stream-Expires-At
+    assert!(response.headers().get("Stream-Expires-At").is_some());
+}
+
+/// Validates spec: 01-stream-lifecycle.md#stream-metadata
+///
+/// Verifies that HEAD includes Stream-Closed for closed stream.
+#[tokio::test]
+async fn test_head_includes_closed_flag() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create closed stream
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .header("Stream-Closed", "true")
+        .send()
+        .await
+        .unwrap();
+
+    // HEAD request
+    let response = client
+        .head(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let closed = response
+        .headers()
+        .get("Stream-Closed")
+        .expect("Missing Stream-Closed header")
+        .to_str()
+        .unwrap();
+    assert_eq!(closed, "true");
+}

@@ -21,7 +21,10 @@ pub fn build_router<S: Storage + 'static>(storage: Arc<S>) -> Router {
 /// All protocol routes have security headers applied via middleware.
 fn protocol_routes<S: Storage + 'static>(storage: Arc<S>) -> Router {
     Router::new()
-        .route("/{name}", put(handlers::put::create_stream::<S>))
+        .route(
+            "/{name}",
+            put(handlers::put::create_stream::<S>).head(handlers::head::stream_metadata::<S>),
+        )
         .layer(axum_middleware::from_fn(
             middleware::security::add_security_headers,
         ))

@@ -19,10 +19,12 @@ struct StreamEntry {
 
 impl StreamEntry {
     fn new(config: StreamConfig) -> Self {
+        // Initialize closed flag from config
+        let closed = config.created_closed;
         Self {
             config,
             messages: Vec::new(),
-            closed: false,
+            closed,
             next_read_seq: 0,
             next_byte_offset: 0,
             total_bytes: 0,
