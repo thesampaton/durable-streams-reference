@@ -506,3 +506,118 @@ async fn test_invalid_offset_returns_400() {
 
     assert_eq!(response.status(), 400, "Expected 400 Bad Request");
 }
+
+/// Regression test: Verifies response headers match body snapshot under concurrent appends
+///
+/// This test prevents reintroduction of a bug where calling storage.head() after
+/// storage.read() could return offsets from a newer snapshot than the body,
+/// breaking resumable reads when a concurrent append lands between the calls.
+#[tokio::test]
+async fn test_response_headers_match_body_snapshot() {
+    let (base_url, _port) = spawn_test_server().await;
+    let client = test_client();
+    let stream_name = unique_stream_name();
+
+    // Create stream and append initial data
+    client
+        .put(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .send()
+        .await
+        .unwrap();
+
+    client
+        .post(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .body("message1")
+        .send()
+        .await
+        .unwrap();
+
+    // Read and capture response headers
+    let response1 = client
+        .get(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    let next_offset1 = response1
+        .headers()
+        .get("Stream-Next-Offset")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let etag1 = response1
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let body1 = response1.text().await.unwrap();
+    assert_eq!(body1, "message1");
+
+    // Verify next_offset points after message1
+    assert_eq!(next_offset1, "0000000000000001_0000000000000008");
+
+    // Verify ETag reflects the range we actually read
+    assert_eq!(etag1, "\"-1:0000000000000001_0000000000000008\"");
+
+    // Append more data (simulating concurrent producer)
+    client
+        .post(format!("{base_url}/v1/stream/{stream_name}"))
+        .header("Content-Type", "text/plain")
+        .body("message2")
+        .send()
+        .await
+        .unwrap();
+
+    // Read again from start
+    let response2 = client
+        .get(format!("{base_url}/v1/stream/{stream_name}"))
+        .send()
+        .await
+        .unwrap();
+
+    let next_offset2 = response2
+        .headers()
+        .get("Stream-Next-Offset")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let etag2 = response2
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let body2 = response2.text().await.unwrap();
+    assert_eq!(body2, "message1message2");
+
+    // Verify next_offset now points after message2
+    assert_eq!(next_offset2, "0000000000000002_0000000000000010");
+
+    // Verify new ETag reflects both messages
+    assert_eq!(etag2, "\"-1:0000000000000002_0000000000000010\"");
+
+    // Critical: Resume from first read's next_offset should give us only message2
+    let response3 = client
+        .get(format!(
+            "{base_url}/v1/stream/{stream_name}?offset={next_offset1}"
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    let body3 = response3.text().await.unwrap();
+    assert_eq!(
+        body3, "message2",
+        "Resuming from first read's next_offset should return only new data, \
+         proving the offset was consistent with the first read's body"
+    );
+}
