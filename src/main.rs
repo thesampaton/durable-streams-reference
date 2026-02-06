@@ -1,10 +1,40 @@
-mod config;
-mod handlers;
-mod middleware;
-mod protocol;
-mod router;
-mod storage;
+use durable_streams_rust_server::{config::Config, router};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Load configuration
+    let config = Config::from_env();
+    let addr = format!("0.0.0.0:{}", config.port);
+
+    tracing::info!("Starting durable streams server on {}", addr);
+    tracing::info!(
+        "Max memory: {} bytes, Max per stream: {} bytes",
+        config.max_memory_bytes,
+        config.max_stream_bytes
+    );
+
+    // Build router
+    let app = router::build_router();
+
+    // Bind and serve
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind to {addr}: {e}"));
+
+    tracing::info!("Server listening on {}", addr);
+    tracing::info!("Health check: http://{}/healthz", addr);
+    tracing::info!("Protocol base: http://{}/v1/stream/", addr);
+
+    axum::serve(listener, app)
+        .await
+        .unwrap_or_else(|e| panic!("Server error: {e}"));
 }

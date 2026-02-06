@@ -8,7 +8,7 @@ spec sections or conformance tests (or explicit gap references).
 
 | Decision | Spec/Test Link | Rationale | Date |
 |----------|----------------|-----------|------|
-| _Decisions will be recorded here as implementation progresses_ | | | |
+| Health check at `/healthz` outside `/v1/stream/` namespace | Gap: Not covered by conformance tests | Health checks are infrastructure concern, not part of the protocol API. Keeping separate namespaces prevents confusion and allows protocol versioning without affecting health checks. | 2026-02-06 |
 
 ## Decision Entry Format
 
