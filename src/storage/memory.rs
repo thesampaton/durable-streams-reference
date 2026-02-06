@@ -187,6 +187,85 @@ impl Storage for InMemoryStorage {
         Ok(offset)
     }
 
+    fn batch_append(&self, name: &str, messages: Vec<Bytes>, content_type: &str) -> Result<Offset> {
+        if messages.is_empty() {
+            return Err(Error::InvalidHeader {
+                header: "Content-Length".to_string(),
+                reason: "batch cannot be empty".to_string(),
+            });
+        }
+
+        let stream_arc = self
+            .get_stream(name)
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+
+        // Acquire per-stream write lock for atomic batch operation
+        let mut stream = stream_arc.write().expect("stream lock poisoned");
+
+        // Check if stream is expired
+        if Self::is_expired(&stream) {
+            return Err(Error::StreamExpired);
+        }
+
+        // Check if stream is closed
+        if stream.closed {
+            return Err(Error::StreamClosed);
+        }
+
+        // Check content type match (normalized comparison)
+        let normalized_ct = content_type.to_lowercase();
+        let expected_ct = stream.config.content_type.to_lowercase();
+        if normalized_ct != expected_ct {
+            return Err(Error::ContentTypeMismatch {
+                expected: stream.config.content_type.clone(),
+                actual: content_type.to_string(),
+            });
+        }
+
+        // Calculate total bytes for the batch
+        let mut total_batch_bytes = 0u64;
+        let mut message_sizes = Vec::with_capacity(messages.len());
+        for data in &messages {
+            let byte_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
+            message_sizes.push(byte_len);
+            total_batch_bytes += byte_len;
+        }
+
+        // Check memory limits BEFORE any modifications
+        let current_total = *self.total_bytes.read().expect("total_bytes lock poisoned");
+        if current_total + total_batch_bytes > self.max_total_bytes {
+            return Err(Error::MemoryLimitExceeded);
+        }
+
+        if stream.total_bytes + total_batch_bytes > self.max_stream_bytes {
+            return Err(Error::StreamSizeLimitExceeded);
+        }
+
+        // All checks passed - now commit all messages atomically
+        let mut last_offset = None;
+        for (data, byte_len) in messages.into_iter().zip(message_sizes) {
+            // Generate offset
+            let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
+
+            // Update counters
+            stream.next_read_seq += 1;
+            stream.next_byte_offset += byte_len;
+            stream.total_bytes += byte_len;
+
+            // Store message
+            let message = Message::new(offset.clone(), data);
+            stream.messages.push(message);
+
+            last_offset = Some(offset);
+        }
+
+        // Update global memory counter (once for the whole batch)
+        let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
+        *total += total_batch_bytes;
+
+        Ok(last_offset.expect("batch was non-empty"))
+    }
+
     fn read(&self, name: &str, from_offset: &Offset) -> Result<ReadResult> {
         let stream_arc = self
             .get_stream(name)

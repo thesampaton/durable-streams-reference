@@ -1,5 +1,6 @@
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::{self, names};
+use crate::protocol::json_mode;
 use crate::storage::Storage;
 use axum::{
     body::Body,
@@ -65,33 +66,44 @@ pub async fn append_data<S: Storage>(
     }
 
     // Append data if body is non-empty
-    let next_offset = if body_bytes.is_empty() {
-        // No data to append, just get current next offset
-        storage.head(&name)?.next_offset
-    } else {
-        // Attempt append - catch StreamClosed to add headers
-        match storage.append(&name, body_bytes, &normalized_ct) {
-            Ok(_offset) => {
-                // Success - get next offset
-                storage.head(&name)?.next_offset
+    let next_offset =
+        if body_bytes.is_empty() {
+            // No data to append, just get current next offset
+            storage.head(&name)?.next_offset
+        } else {
+            // Check if JSON mode
+            let messages_to_append = if json_mode::is_json_content_type(&normalized_ct) {
+                // JSON mode: process and flatten arrays
+                json_mode::process_append(&body_bytes)?
+            } else {
+                // Non-JSON mode: append as single message
+                vec![body_bytes]
+            };
+
+            // Always append via batch API so JSON array requests remain atomic.
+            match storage.batch_append(&name, messages_to_append, &normalized_ct) {
+                Ok(_offset) => {
+                    // Success
+                }
+                Err(Error::StreamClosed) => {
+                    // Stream is closed - return 409 with Stream-Closed header
+                    let metadata = storage.head(&name)?;
+                    let mut error_headers = HeaderMap::new();
+                    error_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
+                    error_headers.insert(
+                        names::STREAM_NEXT_OFFSET,
+                        metadata.next_offset.to_string().parse().unwrap(),
+                    );
+                    error_headers.insert("cache-control", "no-store".parse().unwrap());
+                    return Ok((StatusCode::CONFLICT, error_headers, "Stream is closed")
+                        .into_response());
+                }
+                Err(e) => return Err(e),
             }
-            Err(Error::StreamClosed) => {
-                // Stream is closed - return 409 with Stream-Closed header
-                let metadata = storage.head(&name)?;
-                let mut error_headers = HeaderMap::new();
-                error_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
-                error_headers.insert(
-                    names::STREAM_NEXT_OFFSET,
-                    metadata.next_offset.to_string().parse().unwrap(),
-                );
-                error_headers.insert("cache-control", "no-store".parse().unwrap());
-                return Ok(
-                    (StatusCode::CONFLICT, error_headers, "Stream is closed").into_response()
-                );
-            }
-            Err(e) => return Err(e),
-        }
-    };
+
+            // Get next offset after all appends
+            storage.head(&name)?.next_offset
+        };
 
     // Close stream if requested
     if should_close {

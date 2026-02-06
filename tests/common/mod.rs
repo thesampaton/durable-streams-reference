@@ -18,6 +18,14 @@ pub fn unique_stream_name() -> String {
 ///
 /// Returns the bound address and port number.
 pub async fn spawn_test_server() -> (String, u16) {
+    spawn_test_server_with_limits(1024 * 1024 * 100, 1024 * 1024 * 10).await
+}
+
+/// Spawn a test server with custom memory limits.
+pub async fn spawn_test_server_with_limits(
+    max_total_bytes: u64,
+    max_stream_bytes: u64,
+) -> (String, u16) {
     // Bind to port 0 to get a random available port
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -26,8 +34,7 @@ pub async fn spawn_test_server() -> (String, u16) {
     let addr = listener.local_addr().expect("Failed to get local addr");
     let port = addr.port();
 
-    // Create storage with generous limits for testing
-    let storage = Arc::new(InMemoryStorage::new(1024 * 1024 * 100, 1024 * 1024 * 10));
+    let storage = Arc::new(InMemoryStorage::new(max_total_bytes, max_stream_bytes));
 
     // Build and spawn server
     let app = durable_streams_rust_server::router::build_router(storage);

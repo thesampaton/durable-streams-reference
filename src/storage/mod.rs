@@ -134,6 +134,17 @@ pub trait Storage: Send + Sync {
     /// Returns `Err(Error::ContentTypeMismatch)` if content type doesn't match.
     fn append(&self, name: &str, data: Bytes, content_type: &str) -> Result<Offset>;
 
+    /// Append multiple messages atomically
+    ///
+    /// All messages are validated and committed as a single atomic operation.
+    /// Either all messages are appended successfully, or none are.
+    /// Returns the offset of the last appended message.
+    ///
+    /// Returns `Err(Error::StreamClosed)` if stream is closed.
+    /// Returns `Err(Error::ContentTypeMismatch)` if content type doesn't match.
+    /// Returns `Err(Error::MemoryLimitExceeded)` if batch would exceed limits.
+    fn batch_append(&self, name: &str, messages: Vec<Bytes>, content_type: &str) -> Result<Offset>;
+
     /// Read messages from a stream starting at offset
     ///
     /// If `from_offset` is `Offset::start()`, reads from beginning.

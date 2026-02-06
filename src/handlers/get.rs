@@ -1,5 +1,6 @@
 use crate::protocol::error::Result;
 use crate::protocol::headers::names;
+use crate::protocol::json_mode;
 use crate::protocol::offset::Offset;
 use crate::storage::Storage;
 use axum::{
@@ -90,17 +91,28 @@ pub async fn read_stream<S: Storage>(
         return Ok((StatusCode::NOT_MODIFIED, response_headers).into_response());
     }
 
-    // Concatenate message data (Bytes end-to-end, zero-copy!)
-    let body = if read_result.messages.is_empty() {
-        bytes::Bytes::new()
+    // Build response body
+    let body = if json_mode::is_json_content_type(&content_type) {
+        // JSON mode: wrap messages in array
+        let message_data: Vec<_> = read_result
+            .messages
+            .iter()
+            .map(|m| m.data.clone())
+            .collect();
+        json_mode::wrap_read(&message_data)?
     } else {
-        let total_len: usize = read_result.messages.iter().map(|m| m.data.len()).sum();
+        // Non-JSON mode: concatenate message data (Bytes end-to-end, zero-copy!)
+        if read_result.messages.is_empty() {
+            bytes::Bytes::new()
+        } else {
+            let total_len: usize = read_result.messages.iter().map(|m| m.data.len()).sum();
 
-        let mut buf = BytesMut::with_capacity(total_len);
-        for message in &read_result.messages {
-            buf.put(message.data.clone());
+            let mut buf = BytesMut::with_capacity(total_len);
+            for message in &read_result.messages {
+                buf.put(message.data.clone());
+            }
+            buf.freeze()
         }
-        buf.freeze()
     };
 
     // Build response headers
