@@ -295,15 +295,24 @@ async fn test_close_with_non_true_value_ignored() {
 
 /// Validates spec: 08-stream-closure.md#read-mode-behavior
 ///
-/// Reading a closed stream mid-stream (not at tail) should NOT include
-/// Stream-Closed header.
+/// Reading an open stream with data returns Stream-Up-To-Date: true
+/// but does NOT include Stream-Closed, verifying the header is only
+/// emitted when the stream is actually closed.
+///
+/// Note: The server returns all messages from the requested offset to
+/// the end of the stream in a single response — pagination is the
+/// client's responsibility (resume from Stream-Next-Offset). Because
+/// of this, at_tail is always true for data reads, so a true
+/// "mid-stream on closed" scenario (at_tail=false, closed=true) cannot
+/// occur at the HTTP layer. This test covers the `closed` guard
+/// dimension instead: at_tail=true, closed=false → no Stream-Closed.
 #[tokio::test]
-async fn test_read_mid_stream_omits_closed_header() {
+async fn test_read_open_stream_omits_closed_header() {
     let (base_url, _port) = spawn_test_server().await;
     let client = test_client();
     let name = setup_stream(&base_url, &client).await;
 
-    // Append several messages
+    // Append messages but do NOT close
     for msg in &["first", "second", "third"] {
         client
             .post(format!("{base_url}/v1/stream/{name}"))
@@ -314,38 +323,13 @@ async fn test_read_mid_stream_omits_closed_header() {
             .unwrap();
     }
 
-    // Close the stream
-    client
-        .post(format!("{base_url}/v1/stream/{name}"))
-        .header("Content-Type", "text/plain")
-        .header("Stream-Closed", "true")
-        .send()
-        .await
-        .unwrap();
-
-    // Read from start — will get all messages but reader has NOT consumed to tail yet
-    // Read with offset -1 gets all messages; at_tail will be true here because we
-    // received all of them. To get a mid-stream read, we'd need to read with a
-    // limit. But our implementation returns all messages from the offset, so reading
-    // from -1 on a closed stream returns everything (at_tail=true).
-    //
-    // To test mid-stream, read from offset 0 (after first message) and verify.
-    // Actually, with our offset semantics, reading from the first message's offset
-    // returns messages from that position. Let's read from "now" which would be
-    // at tail.
-    //
-    // The simplest mid-stream test: read from an offset that leaves messages ahead.
-    // Use the first message's offset to read — messages exist, but check if
-    // closed shows up only at tail.
+    // Read all messages — at_tail=true, closed=false
     let response = client
         .get(format!("{base_url}/v1/stream/{name}?offset=-1"))
         .send()
         .await
         .unwrap();
 
-    // Since we read from -1 and got all 3 messages, we ARE at the tail.
-    // The Stream-Closed header SHOULD be present (closed + at tail).
-    // This case is actually testing the "at tail" scenario. Let's verify that.
     assert_eq!(response.status(), 200);
 
     let up_to_date = response
@@ -356,10 +340,9 @@ async fn test_read_mid_stream_omits_closed_header() {
         .unwrap();
     assert_eq!(up_to_date, "true", "Should be at tail after reading all");
 
-    let closed = response.headers().get("Stream-Closed");
     assert!(
-        closed.is_some(),
-        "Stream-Closed should be present at tail of closed stream"
+        response.headers().get("Stream-Closed").is_none(),
+        "Stream-Closed must not be present on an open stream"
     );
 }
 
