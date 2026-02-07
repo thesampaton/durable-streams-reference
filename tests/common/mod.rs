@@ -58,3 +58,11 @@ pub fn test_client() -> reqwest::Client {
         .build()
         .expect("Failed to build test client")
 }
+
+/// Create an HTTP client with a custom timeout for long-poll tests
+pub fn test_client_with_timeout(timeout_secs: u64) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .expect("Failed to build test client")
+}

@@ -6,6 +6,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use tokio::sync::broadcast;
 
 /// Per-producer state tracked within a stream
 struct ProducerState {
@@ -16,6 +17,10 @@ struct ProducerState {
 
 /// Duration after which stale producer state is cleaned up (7 days)
 const PRODUCER_STATE_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Broadcast channel capacity for long-poll/SSE notifications.
+/// Small because notifications are hints (no payload), not data delivery.
+const NOTIFY_CHANNEL_CAPACITY: usize = 16;
 
 /// Internal stream entry
 struct StreamEntry {
@@ -28,12 +33,15 @@ struct StreamEntry {
     created_at: DateTime<Utc>,
     /// Per-producer state for idempotent producer support
     producers: HashMap<String, ProducerState>,
+    /// Broadcast sender for notifying long-poll/SSE subscribers
+    notify: broadcast::Sender<()>,
 }
 
 impl StreamEntry {
     fn new(config: StreamConfig) -> Self {
         // Initialize closed flag from config
         let closed = config.created_closed;
+        let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
         Self {
             config,
             messages: Vec::new(),
@@ -43,6 +51,7 @@ impl StreamEntry {
             total_bytes: 0,
             created_at: Utc::now(),
             producers: HashMap::new(),
+            notify,
         }
     }
 
@@ -147,6 +156,10 @@ impl InMemoryStorage {
 
         let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
         *total += total_batch_bytes;
+
+        // Notify long-poll/SSE subscribers that new data is available.
+        // Ignore errors (no active receivers is fine).
+        let _ = stream.notify.send(());
 
         Ok(())
     }
@@ -397,6 +410,9 @@ impl Storage for InMemoryStorage {
 
         stream.closed = true;
 
+        // Notify long-poll subscribers so they wake up and see the closed state
+        let _ = stream.notify.send(());
+
         Ok(())
     }
 
@@ -531,6 +547,17 @@ impl Storage for InMemoryStorage {
         } else {
             false
         }
+    }
+
+    fn subscribe(&self, name: &str) -> Option<broadcast::Receiver<()>> {
+        let stream_arc = self.get_stream(name)?;
+        let stream = stream_arc.read().expect("stream lock poisoned");
+
+        if Self::is_expired(&stream) {
+            return None;
+        }
+
+        Some(stream.notify.subscribe())
     }
 }
 

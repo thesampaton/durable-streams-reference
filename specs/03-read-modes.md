@@ -1,11 +1,11 @@
 # Read Modes
 
-Version: 1.0.0
+Version: 2.0.0
 Status: stable
 
 ## Overview
 
-Defines how clients read data from streams via GET requests. Covers three read modes: catch-up (replay historical data), long-poll (wait for new data), and SSE (streaming updates). This document focuses on catch-up mode; long-poll and SSE are covered in subsequent sections.
+Defines how clients read data from streams via GET requests. Covers three read modes: catch-up (replay historical data), long-poll (wait for new data), and SSE (streaming updates). This document covers catch-up and long-poll modes; SSE is covered in a subsequent section.
 
 ## Catch-up Mode (GET)
 
@@ -182,6 +182,137 @@ GET /v1/stream/my-stream?offset=0000000000000002_000000000000000a
 → Returns remaining messages
 ```
 
+## Long-Poll Mode (GET with live=long-poll)
+
+### Request
+
+**Method:** `GET /v1/stream/{name}?offset={offset}&live=long-poll[&cursor={cursor}]`
+
+**Query Parameters:**
+- `offset` (optional): Starting offset, same format as catch-up mode. Default: `-1`
+- `live` (required for long-poll): MUST be `"long-poll"`. Other values return 400
+- `cursor` (optional): Echo of previous `Stream-Cursor` header value for CDN collapsing
+
+**Headers:**
+- `If-None-Match` (optional): ETag from previous read for 304 optimization
+
+### Response
+
+**200 OK** - Data available (immediate catch-up or arrived during wait)
+- Same headers as catch-up 200 response
+- `Stream-Cursor`: Opaque cursor for subsequent long-poll requests (mandatory)
+- **Body**: Concatenated message data
+
+**204 No Content** - Timeout expired or closed stream at tail
+- `Stream-Next-Offset`: Current tail offset
+- `Stream-Up-To-Date`: `"true"`
+- `Stream-Cursor`: Opaque cursor (MUST include when stream is open; MAY omit when `Stream-Closed: true`)
+- `Stream-Closed`: `"true"` if stream is closed
+- No body
+
+**304 Not Modified** - ETag matches (same as catch-up mode)
+
+**400 Bad Request** - Invalid offset or invalid `live` parameter value
+
+**404 Not Found** - Stream does not exist or has expired
+
+### Behavior
+
+The server MUST:
+- If data exists at the requested offset, return it immediately as 200 (same as catch-up, plus `Stream-Cursor`)
+- If at tail and stream is closed, immediately return 204 with `Stream-Closed: true` (MUST NOT wait)
+- If at tail and stream is open, wait for new data up to an implementation-defined timeout
+- Return 204 when the timeout expires with no new data
+- Return 200 when data arrives during the wait period
+- Include `Stream-Cursor` header on all long-poll responses (200 and 204)
+- Reject unknown `live` parameter values with 400
+
+The server SHOULD:
+- Use a reasonable default timeout (this implementation uses 30 seconds)
+
+The server MAY:
+- Accept a `timeout` query parameter (future extension, not required)
+- Impose rate limits (429)
+
+### Timeout
+
+The long-poll timeout is implementation-defined. This server defaults to 30 seconds,
+configurable via the `LONG_POLL_TIMEOUT_SECS` environment variable.
+
+When timeout expires:
+- Return 204 No Content (not an error)
+- Include `Stream-Next-Offset` so client can retry seamlessly
+- Include `Stream-Up-To-Date: true`
+
+### Closed Stream at Tail
+
+When the stream is closed AND the client is already at the tail:
+- The server MUST NOT wait for the long-poll timeout
+- The server MUST immediately return 204 with `Stream-Closed: true`
+- This prevents clients from hanging indefinitely on closed streams
+
+### Stream-Cursor
+
+`Stream-Cursor` is an opaque string that clients echo back in subsequent long-poll
+requests via the `cursor` query parameter. It enables CDN request collapsing.
+
+The cursor value is implementation-defined. Clients MUST treat it as opaque and
+MUST NOT parse or rely on its format.
+
+### Examples
+
+**Long-poll with data already available:**
+```
+GET /v1/stream/my-stream?offset=-1&live=long-poll
+
+→ 200 OK
+Content-Type: text/plain
+Stream-Next-Offset: 0000000000000002_000000000000000a
+Stream-Up-To-Date: true
+Stream-Cursor: 0000000000000002_000000000000000a
+ETag: "-1:0000000000000002_000000000000000a"
+
+message1message2
+```
+
+**Long-poll waiting, data arrives:**
+```
+GET /v1/stream/my-stream?offset=0000000000000002_000000000000000a&live=long-poll&cursor=0000000000000002_000000000000000a
+
+(server waits... new data appended...)
+
+→ 200 OK
+Content-Type: text/plain
+Stream-Next-Offset: 0000000000000003_000000000000001a
+Stream-Up-To-Date: true
+Stream-Cursor: 0000000000000003_000000000000001a
+ETag: "0000000000000002_000000000000000a:0000000000000003_000000000000001a"
+
+newdata
+```
+
+**Long-poll timeout (no new data):**
+```
+GET /v1/stream/my-stream?offset=0000000000000002_000000000000000a&live=long-poll
+
+(server waits... timeout expires...)
+
+→ 204 No Content
+Stream-Next-Offset: 0000000000000002_000000000000000a
+Stream-Up-To-Date: true
+Stream-Cursor: 0000000000000002_000000000000000a
+```
+
+**Long-poll on closed stream at tail:**
+```
+GET /v1/stream/my-stream?offset=0000000000000003_000000000000001a&live=long-poll
+
+→ 204 No Content (immediate, no waiting)
+Stream-Next-Offset: 0000000000000003_000000000000001a
+Stream-Up-To-Date: true
+Stream-Closed: true
+```
+
 ## Conformance
 
 This spec covers conformance test blocks:
@@ -190,13 +321,17 @@ This spec covers conformance test blocks:
 - Read-Your-Writes Consistency
 - Chunking/Large Payloads
 - Caching and ETag
+- Long-Poll
 
 ## Traceability
 
 - Upstream: PROTOCOL.md#read-data
+- Upstream: PROTOCOL.md#read-stream-live-long-poll (§5.7)
 - Conformance: `describe('Read Operations', ...)`
 - Conformance: `describe('Offset Validation', ...)`
 
 ## Gaps
 
-None identified. Spec aligns with upstream protocol and conformance tests.
+| Ambiguity | Interpretation | Why Conservative |
+|-----------|----------------|------------------|
+| Long-poll timeout value not specified | Default 30s, configurable via env var | Reasonable default; allows tuning without code changes |

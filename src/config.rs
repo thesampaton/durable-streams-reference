@@ -1,4 +1,5 @@
 use std::env;
+use std::time::Duration;
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -33,6 +34,23 @@ impl Config {
             cors_origins: env::var("CORS_ORIGINS").unwrap_or_else(|_| "*".to_string()),
         }
     }
+}
+
+/// Default long-poll timeout in seconds
+const DEFAULT_LONG_POLL_TIMEOUT_SECS: u64 = 30;
+
+/// Get the long-poll timeout duration.
+///
+/// Reads `LONG_POLL_TIMEOUT_SECS` env var at call time, falling back
+/// to the default (30s). Called from the GET handler on each long-poll
+/// request, keeping the router signature unchanged.
+#[must_use]
+pub fn long_poll_timeout() -> Duration {
+    let secs = env::var("LONG_POLL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_LONG_POLL_TIMEOUT_SECS);
+    Duration::from_secs(secs)
 }
 
 impl Default for Config {

@@ -5,6 +5,7 @@ use crate::protocol::offset::Offset;
 use crate::protocol::producer::ProducerHeaders;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use tokio::sync::broadcast;
 
 /// Stream configuration
 ///
@@ -216,4 +217,13 @@ pub trait Storage: Send + Sync {
 
     /// Check if a stream exists
     fn exists(&self, name: &str) -> bool;
+
+    /// Subscribe to notifications for new data on a stream.
+    ///
+    /// Returns a broadcast receiver that fires when data is appended
+    /// or the stream is closed. Returns `None` if the stream does not
+    /// exist or has expired.
+    ///
+    /// The method itself is sync; the handler awaits on the receiver.
+    fn subscribe(&self, name: &str) -> Option<broadcast::Receiver<()>>;
 }
