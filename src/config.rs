@@ -14,6 +14,8 @@ pub struct Config {
     pub cors_origins: String,
     /// Long-poll timeout duration
     pub long_poll_timeout: Duration,
+    /// SSE idle close timeout in seconds (0 disables)
+    pub sse_idle_close_secs: u64,
 }
 
 impl Config {
@@ -33,6 +35,10 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
 
+        let sse_idle_close_secs: u64 = get("SSE_IDLE_CLOSE_SECS")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
+
         Self {
             port: get("PORT").and_then(|s| s.parse().ok()).unwrap_or(4437),
             max_memory_bytes: get("MAX_MEMORY_BYTES")
@@ -43,6 +49,7 @@ impl Config {
                 .unwrap_or(10 * 1024 * 1024), // 10 MB default
             cors_origins: get("CORS_ORIGINS").unwrap_or_else(|| "*".to_string()),
             long_poll_timeout: Duration::from_secs(long_poll_secs),
+            sse_idle_close_secs,
         }
     }
 }
@@ -55,6 +62,7 @@ impl Default for Config {
             max_stream_bytes: 10 * 1024 * 1024,
             cors_origins: "*".to_string(),
             long_poll_timeout: Duration::from_secs(30),
+            sse_idle_close_secs: 60,
         }
     }
 }
@@ -62,6 +70,12 @@ impl Default for Config {
 /// Typed wrapper for long-poll timeout, injected via axum `Extension`.
 #[derive(Debug, Clone, Copy)]
 pub struct LongPollTimeout(pub Duration);
+
+/// Typed wrapper for SSE idle close timeout in seconds (0 = disabled).
+///
+/// Injected via axum `Extension`.
+#[derive(Debug, Clone, Copy)]
+pub struct SseIdleClose(pub u64);
 
 #[cfg(test)]
 mod tests {
@@ -85,6 +99,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
+        assert_eq!(config.sse_idle_close_secs, 60);
     }
 
     #[test]
@@ -95,6 +110,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
+        assert_eq!(config.sse_idle_close_secs, 60);
     }
 
     #[test]
@@ -105,6 +121,7 @@ mod tests {
             ("MAX_STREAM_BYTES", "20000000"),
             ("CORS_ORIGINS", "https://example.com"),
             ("LONG_POLL_TIMEOUT_SECS", "5"),
+            ("SSE_IDLE_CLOSE_SECS", "120"),
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.port, 8080);
@@ -112,6 +129,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 20_000_000);
         assert_eq!(config.cors_origins, "https://example.com");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(5));
+        assert_eq!(config.sse_idle_close_secs, 120);
     }
 
     #[test]
@@ -121,6 +139,7 @@ mod tests {
             ("MAX_MEMORY_BYTES", ""),
             ("MAX_STREAM_BYTES", "-1"),
             ("LONG_POLL_TIMEOUT_SECS", "abc"),
+            ("SSE_IDLE_CLOSE_SECS", "xyz"),
         ]);
         let config = Config::from_lookup(get);
         // All fall back to defaults because the values don't parse
@@ -128,6 +147,7 @@ mod tests {
         assert_eq!(config.max_memory_bytes, 100 * 1024 * 1024);
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
+        assert_eq!(config.sse_idle_close_secs, 60);
     }
 
     #[test]
@@ -140,6 +160,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
+        assert_eq!(config.sse_idle_close_secs, 60);
     }
 
     #[test]
@@ -153,11 +174,18 @@ mod tests {
         assert_eq!(via_env.max_stream_bytes, via_lookup.max_stream_bytes);
         assert_eq!(via_env.cors_origins, via_lookup.cors_origins);
         assert_eq!(via_env.long_poll_timeout, via_lookup.long_poll_timeout);
+        assert_eq!(via_env.sse_idle_close_secs, via_lookup.sse_idle_close_secs);
     }
 
     #[test]
     fn test_long_poll_timeout_newtype() {
         let timeout = LongPollTimeout(Duration::from_secs(10));
         assert_eq!(timeout.0, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_sse_idle_close_newtype() {
+        let close = SseIdleClose(120);
+        assert_eq!(close.0, 120);
     }
 }

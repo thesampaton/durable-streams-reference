@@ -1,18 +1,25 @@
-use crate::config::LongPollTimeout;
+use crate::config::{LongPollTimeout, SseIdleClose};
 use crate::protocol::cursor;
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::names;
 use crate::protocol::json_mode;
 use crate::protocol::offset::Offset;
+use crate::protocol::sse::{self, ControlPayload};
 use crate::storage::{ReadResult, Storage};
 use axum::{
     Extension,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use bytes::{BufMut, BytesMut};
+use futures_util::stream::Stream;
 use serde::Deserialize;
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,9 +45,10 @@ fn default_offset() -> String {
 
 /// GET handler for reading stream data
 ///
-/// Supports two modes:
+/// Supports three modes:
 /// - Catch-up (no `live` param): immediate read, returns all available data
 /// - Long-poll (`live=long-poll`): waits for new data at tail
+/// - SSE (`live=sse`): streaming Server-Sent Events
 ///
 /// # Errors
 ///
@@ -51,45 +59,47 @@ fn default_offset() -> String {
 ///
 /// Panics if validated header values fail to parse into `HeaderValue`,
 /// which should never happen with valid inputs.
-pub async fn read_stream<S: Storage>(
+pub async fn read_stream<S: Storage + 'static>(
     State(storage): State<Arc<S>>,
     Path(name): Path<String>,
     Query(query): Query<ReadQuery>,
     Extension(LongPollTimeout(timeout)): Extension<LongPollTimeout>,
+    Extension(SseIdleClose(idle_close_secs)): Extension<SseIdleClose>,
     headers: HeaderMap,
 ) -> Result<Response> {
-    // Validate live parameter
-    if let Some(ref live) = query.live
-        && live != "long-poll"
-    {
-        return Err(Error::InvalidHeader {
-            header: "live".to_string(),
-            reason: format!("unsupported live mode: {live}"),
-        });
-    }
-
     let offset = Offset::from_str(&query.offset)?;
-    let if_none_match = headers
-        .get("if-none-match")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-
-    // Get content type (immutable stream config, safe to fetch separately)
     let metadata = storage.head(&name)?;
     let content_type = metadata.config.content_type.clone();
 
-    if query.live.is_some() {
-        read_long_poll(
-            &storage,
-            &name,
-            &offset,
-            &query.offset,
-            if_none_match.as_ref(),
-            &content_type,
-            timeout,
-        )
-        .await
+    if let Some(ref live) = query.live {
+        match live.as_str() {
+            "long-poll" => {
+                let if_none_match = headers
+                    .get("if-none-match")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                read_long_poll(
+                    &storage,
+                    &name,
+                    &offset,
+                    &query.offset,
+                    if_none_match.as_ref(),
+                    &content_type,
+                    timeout,
+                )
+                .await
+            }
+            "sse" => read_sse(storage, name, &offset, &content_type, idle_close_secs),
+            other => Err(Error::InvalidHeader {
+                header: "live".to_string(),
+                reason: format!("unsupported live mode: {other}"),
+            }),
+        }
     } else {
+        let if_none_match = headers
+            .get("if-none-match")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         read_catch_up(
             &storage,
             &name,
@@ -178,6 +188,161 @@ async fn read_long_poll<S: Storage>(
             let is_closed = read_result.closed && read_result.at_tail;
             Ok(build_204_response(&read_result.next_offset, is_closed))
         }
+    }
+}
+
+/// SSE mode: stream data as Server-Sent Events (PROTOCOL.md §5.8).
+///
+/// Validates preconditions (stream existence, offset) eagerly before
+/// starting the stream. Once streaming begins, errors are silently
+/// dropped (SSE has no error frame).
+fn read_sse<S: Storage + 'static>(
+    storage: Arc<S>,
+    name: String,
+    offset: &Offset,
+    content_type: &str,
+    idle_close_secs: u64,
+) -> Result<Response> {
+    let is_binary = sse::is_binary_content_type(content_type);
+
+    // Subscribe before read to avoid missing notifications
+    let receiver = storage
+        .subscribe(&name)
+        .ok_or_else(|| Error::NotFound(name.clone()))?;
+
+    // Initial read to get current state
+    let read_result = storage.read(&name, offset)?;
+
+    let stream = build_sse_stream(
+        storage,
+        name,
+        read_result,
+        receiver,
+        is_binary,
+        idle_close_secs,
+    );
+
+    let sse_response =
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)));
+
+    let mut response = sse_response.into_response();
+
+    // Add binary encoding header if needed
+    if is_binary {
+        response
+            .headers_mut()
+            .insert("stream-sse-data-encoding", "base64".parse().unwrap());
+    }
+
+    Ok(response)
+}
+
+/// Build the async stream that yields SSE events.
+///
+/// Separated from `read_sse` to keep each function focused.
+fn build_sse_stream<S: Storage + 'static>(
+    storage: Arc<S>,
+    name: String,
+    initial_read: ReadResult,
+    mut receiver: tokio::sync::broadcast::Receiver<()>,
+    is_binary: bool,
+    idle_close_secs: u64,
+) -> Pin<Box<dyn Stream<Item = std::result::Result<Event, Infallible>> + Send>> {
+    let stream = async_stream::stream! {
+        let read_result = initial_read;
+
+        // Emit initial data + control
+        for msg in &read_result.messages {
+            yield Ok(sse::build_data_event(&msg.data, is_binary));
+        }
+
+        let control = build_sse_control(&read_result);
+        yield Ok(sse::build_control_event(&control));
+
+        // If closed at tail, we're done
+        if read_result.closed && read_result.at_tail {
+            return;
+        }
+
+        // Enter wait loop at tail
+        let mut tail_offset = read_result.next_offset;
+        let idle_timeout = if idle_close_secs > 0 {
+            Some(Duration::from_secs(idle_close_secs))
+        } else {
+            None
+        };
+
+        loop {
+            tokio::select! {
+                recv_result = receiver.recv() => {
+                    match recv_result {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // New data or we fell behind — re-read from tail
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Channel closed — final read + emit + end
+                            if let Ok(rr) = storage.read(&name, &tail_offset) {
+                                for msg in &rr.messages {
+                                    yield Ok(sse::build_data_event(&msg.data, is_binary));
+                                }
+                                let ctrl = build_sse_control(&rr);
+                                yield Ok(sse::build_control_event(&ctrl));
+                            }
+                            return;
+                        }
+                    }
+                }
+                () = async {
+                    match idle_timeout {
+                        Some(d) => tokio::time::sleep(d).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Idle close per PROTOCOL.md §5.8
+                    return;
+                }
+            }
+
+            // Re-read from tail position
+            let Ok(rr) = storage.read(&name, &tail_offset) else {
+                return;
+            };
+
+            for msg in &rr.messages {
+                yield Ok(sse::build_data_event(&msg.data, is_binary));
+            }
+
+            let ctrl = build_sse_control(&rr);
+            yield Ok(sse::build_control_event(&ctrl));
+
+            if rr.closed && rr.at_tail {
+                return;
+            }
+
+            tail_offset = rr.next_offset;
+        }
+    };
+
+    Box::pin(stream)
+}
+
+/// Build a `ControlPayload` from a `ReadResult`.
+fn build_sse_control(read_result: &ReadResult) -> ControlPayload {
+    let is_closed_at_tail = read_result.closed && read_result.at_tail;
+
+    ControlPayload {
+        stream_next_offset: read_result.next_offset.to_string(),
+        stream_cursor: if is_closed_at_tail {
+            None
+        } else {
+            Some(cursor::generate(&read_result.next_offset))
+        },
+        up_to_date: if read_result.at_tail {
+            Some(true)
+        } else {
+            None
+        },
+        stream_closed: if is_closed_at_tail { Some(true) } else { None },
     }
 }
 

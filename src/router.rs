@@ -1,4 +1,4 @@
-use crate::config::{Config, LongPollTimeout};
+use crate::config::{Config, LongPollTimeout, SseIdleClose};
 use crate::{handlers, middleware, storage::Storage};
 use axum::{Extension, Router, middleware as axum_middleware, routing::get};
 use std::sync::Arc;
@@ -27,6 +27,7 @@ fn protocol_routes<S: Storage + 'static>(storage: Arc<S>, config: &Config) -> Ro
                 .post(handlers::post::append_data::<S>)
                 .delete(handlers::delete::delete_stream::<S>),
         )
+        .layer(Extension(SseIdleClose(config.sse_idle_close_secs)))
         .layer(Extension(LongPollTimeout(config.long_poll_timeout)))
         .layer(axum_middleware::from_fn(
             middleware::security::add_security_headers,
