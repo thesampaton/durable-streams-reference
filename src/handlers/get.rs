@@ -1,4 +1,4 @@
-use crate::config;
+use crate::config::LongPollTimeout;
 use crate::protocol::cursor;
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::names;
@@ -6,6 +6,7 @@ use crate::protocol::json_mode;
 use crate::protocol::offset::Offset;
 use crate::storage::{ReadResult, Storage};
 use axum::{
+    Extension,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -14,6 +15,7 @@ use bytes::{BufMut, BytesMut};
 use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Query parameters for GET requests
 #[derive(Debug, Deserialize)]
@@ -53,6 +55,7 @@ pub async fn read_stream<S: Storage>(
     State(storage): State<Arc<S>>,
     Path(name): Path<String>,
     Query(query): Query<ReadQuery>,
+    Extension(LongPollTimeout(timeout)): Extension<LongPollTimeout>,
     headers: HeaderMap,
 ) -> Result<Response> {
     // Validate live parameter
@@ -83,6 +86,7 @@ pub async fn read_stream<S: Storage>(
             &query.offset,
             if_none_match.as_ref(),
             &content_type,
+            timeout,
         )
         .await
     } else {
@@ -128,6 +132,7 @@ async fn read_long_poll<S: Storage>(
     raw_offset: &str,
     if_none_match: Option<&String>,
     content_type: &str,
+    timeout: Duration,
 ) -> Result<Response> {
     // Subscribe BEFORE read to avoid missing notifications between read and subscribe
     let mut receiver = storage
@@ -162,7 +167,6 @@ async fn read_long_poll<S: Storage>(
     let tail_offset = read_result.next_offset.clone();
     let tail_offset_str = tail_offset.to_string();
 
-    let timeout = config::long_poll_timeout();
     tokio::select! {
         _ = receiver.recv() => {
             // Data or close event — re-read from resolved tail position

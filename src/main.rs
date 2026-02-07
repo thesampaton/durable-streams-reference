@@ -30,7 +30,7 @@ async fn main() {
     ));
 
     // Build router
-    let app = router::build_router(storage);
+    let app = router::build_router(storage, &config);
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(&addr)

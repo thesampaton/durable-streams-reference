@@ -1,6 +1,8 @@
+use durable_streams_rust_server::config::Config;
 use durable_streams_rust_server::storage::memory::InMemoryStorage;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::Duration;
 use tokio::net::TcpListener;
 
 /// Global counter for generating unique stream names in tests
@@ -26,6 +28,25 @@ pub async fn spawn_test_server_with_limits(
     max_total_bytes: u64,
     max_stream_bytes: u64,
 ) -> (String, u16) {
+    let config = Config {
+        max_memory_bytes: max_total_bytes,
+        max_stream_bytes,
+        ..Config::default()
+    };
+    spawn_test_server_with_config(config).await
+}
+
+/// Spawn a test server with a custom long-poll timeout.
+pub async fn spawn_test_server_with_timeout(timeout: Duration) -> (String, u16) {
+    let config = Config {
+        long_poll_timeout: timeout,
+        ..Config::default()
+    };
+    spawn_test_server_with_config(config).await
+}
+
+/// Spawn a test server with a full Config.
+async fn spawn_test_server_with_config(config: Config) -> (String, u16) {
     // Bind to port 0 to get a random available port
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -34,10 +55,13 @@ pub async fn spawn_test_server_with_limits(
     let addr = listener.local_addr().expect("Failed to get local addr");
     let port = addr.port();
 
-    let storage = Arc::new(InMemoryStorage::new(max_total_bytes, max_stream_bytes));
+    let storage = Arc::new(InMemoryStorage::new(
+        config.max_memory_bytes,
+        config.max_stream_bytes,
+    ));
 
     // Build and spawn server
-    let app = durable_streams_rust_server::router::build_router(storage);
+    let app = durable_streams_rust_server::router::build_router(storage, &config);
 
     tokio::spawn(async move {
         axum::serve(listener, app)

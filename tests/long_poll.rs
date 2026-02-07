@@ -1,6 +1,9 @@
 mod common;
 
-use common::{spawn_test_server, test_client, test_client_with_timeout, unique_stream_name};
+use common::{
+    spawn_test_server, spawn_test_server_with_timeout, test_client, test_client_with_timeout,
+    unique_stream_name,
+};
 
 /// Validates spec: 03-read-modes.md#long-poll-mode
 ///
@@ -143,12 +146,7 @@ async fn test_long_poll_waits_and_returns_on_new_data() {
 /// Long-poll returns 204 when timeout expires with no new data.
 #[tokio::test]
 async fn test_long_poll_timeout_returns_204() {
-    // Set short timeout for this test
-    unsafe {
-        std::env::set_var("LONG_POLL_TIMEOUT_SECS", "1");
-    }
-
-    let (base_url, _port) = spawn_test_server().await;
+    let (base_url, _port) = spawn_test_server_with_timeout(std::time::Duration::from_secs(1)).await;
     let client = test_client();
     let stream_name = unique_stream_name();
 
@@ -176,11 +174,6 @@ async fn test_long_poll_timeout_returns_204() {
         elapsed >= std::time::Duration::from_millis(900),
         "Should wait at least ~1s, waited {elapsed:?}"
     );
-
-    // Clean up env var
-    unsafe {
-        std::env::remove_var("LONG_POLL_TIMEOUT_SECS");
-    }
 }
 
 /// Validates spec: 03-read-modes.md#closed-stream-at-tail
@@ -360,12 +353,7 @@ async fn test_long_poll_includes_stream_cursor() {
 /// Stream-Up-To-Date, and Stream-Cursor.
 #[tokio::test]
 async fn test_long_poll_204_includes_correct_headers() {
-    // Set short timeout for this test
-    unsafe {
-        std::env::set_var("LONG_POLL_TIMEOUT_SECS", "1");
-    }
-
-    let (base_url, _port) = spawn_test_server().await;
+    let (base_url, _port) = spawn_test_server_with_timeout(std::time::Duration::from_secs(1)).await;
     let client = test_client();
     let stream_name = unique_stream_name();
 
@@ -442,11 +430,6 @@ async fn test_long_poll_204_includes_correct_headers() {
         response.headers().get("Stream-Closed").is_none(),
         "Stream-Closed should not be present on open stream"
     );
-
-    // Clean up env var
-    unsafe {
-        std::env::remove_var("LONG_POLL_TIMEOUT_SECS");
-    }
 }
 
 /// Validates spec: 03-read-modes.md#long-poll-mode
