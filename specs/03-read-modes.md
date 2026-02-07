@@ -1,11 +1,11 @@
 # Read Modes
 
-Version: 2.0.0
+Version: 3.0.0
 Status: stable
 
 ## Overview
 
-Defines how clients read data from streams via GET requests. Covers three read modes: catch-up (replay historical data), long-poll (wait for new data), and SSE (streaming updates). This document covers catch-up and long-poll modes; SSE is covered in a subsequent section.
+Defines how clients read data from streams via GET requests. Covers three read modes: catch-up (replay historical data), long-poll (wait for new data), and SSE (streaming updates).
 
 ## Catch-up Mode (GET)
 
@@ -313,6 +313,134 @@ Stream-Up-To-Date: true
 Stream-Closed: true
 ```
 
+## SSE Mode (GET with live=sse)
+
+### Request
+
+**Method:** `GET /v1/stream/{name}?offset={offset}&live=sse`
+
+**Query Parameters:**
+- `offset` (required): Starting offset for read
+  - Sentinel `-1`: Start from beginning of stream
+  - Sentinel `now`: Start from current tail (skip history)
+  - Hex format: resume from specific offset
+- `live=sse` (required): Indicates SSE streaming mode
+
+### Response
+
+**200 OK** - Streaming body in SSE format
+- `Content-Type: text/event-stream`
+- `stream-sse-data-encoding: base64` (only for binary content types)
+- Security headers applied via middleware
+
+**404 Not Found** - Stream does not exist (returned before streaming starts)
+
+**400 Bad Request** - Invalid offset format
+
+### Event Types
+
+**`event: data`** - Emitted for each stored message
+- One data event per message in the stream
+- For binary streams (content type not `text/*` or `application/json`): payload is base64-encoded per RFC 4648
+- For text and JSON streams: payload is UTF-8 text
+
+**`event: control`** - Emitted after data events
+- JSON object with camelCase field names
+- MUST include `streamNextOffset`: current tail position
+- MUST include `streamCursor` when stream is open (omitted when `streamClosed` is true)
+- MUST include `upToDate: true` when client is caught up with all available data
+- MUST include `streamClosed: true` when stream is closed and all data has been sent
+
+### Behavior
+
+The server MUST:
+- Return `Content-Type: text/event-stream`
+- Emit one `event: data` per stored message
+- Emit `event: control` after each batch of data events
+- Include `streamNextOffset` in every control event
+- Include `streamCursor` in control events when stream is open
+- Include `upToDate: true` when client has caught up
+- Include `streamClosed: true` in final control event when stream is closed at tail
+- Close the connection after emitting `streamClosed: true`
+- Include `stream-sse-data-encoding: base64` header for binary content types
+- Base64-encode data event payloads for binary content types
+- Return 404 before streaming if stream does not exist
+- Support `offset=now` to skip historical data
+- Support `offset=-1` to start from stream beginning
+
+The server SHOULD:
+- Close idle SSE connections approximately every ~60 seconds to enable CDN collapsing
+- Send keep-alive comments to prevent connection timeouts
+
+### Binary Content Type Detection
+
+Content types that are sent as UTF-8 text (no encoding):
+- `text/*` (any text subtype)
+- `application/json`
+
+All other content types are treated as binary and base64-encoded.
+
+### Connection Lifecycle
+
+1. Server validates offset and stream existence (404/400 before streaming)
+2. Server subscribes to broadcast channel before initial read
+3. Initial read: emit data events for each message, then control event
+4. If at tail and closed: emit final control with `streamClosed: true`, close connection
+5. If at tail and open: emit control with `upToDate: true`, enter wait loop
+6. Wait loop: wait for new data notifications or idle timeout
+7. On notification: re-read from tail, emit data + control, repeat
+8. On idle timeout: close connection (client reconnects)
+
+### Idle Close
+
+This server defaults to closing idle SSE connections after 60 seconds,
+configurable via the `SSE_IDLE_CLOSE_SECS` environment variable (0 disables).
+
+### Examples
+
+**SSE with data and closure:**
+```
+GET /v1/stream/my-stream?offset=-1&live=sse
+
+→ 200 OK
+Content-Type: text/event-stream
+
+event: data
+data: hello
+
+event: data
+data: world
+
+event: control
+data: {"streamNextOffset":"0000000000000002_000000000000000a","streamClosed":true}
+```
+
+**SSE with offset=now on closed stream:**
+```
+GET /v1/stream/my-stream?offset=now&live=sse
+
+→ 200 OK
+Content-Type: text/event-stream
+
+event: control
+data: {"streamNextOffset":"0000000000000002_000000000000000a","streamClosed":true}
+```
+
+**SSE with binary data:**
+```
+GET /v1/stream/my-stream?offset=-1&live=sse
+
+→ 200 OK
+Content-Type: text/event-stream
+stream-sse-data-encoding: base64
+
+event: data
+data: AQIDBAUG
+
+event: control
+data: {"streamNextOffset":"0000000000000001_0000000000000006","streamClosed":true}
+```
+
 ## Conformance
 
 This spec covers conformance test blocks:
@@ -322,16 +450,20 @@ This spec covers conformance test blocks:
 - Chunking/Large Payloads
 - Caching and ETag
 - Long-Poll
+- SSE
 
 ## Traceability
 
 - Upstream: PROTOCOL.md#read-data
 - Upstream: PROTOCOL.md#read-stream-live-long-poll (§5.7)
+- Upstream: PROTOCOL.md#read-stream-live-sse (§5.8)
 - Conformance: `describe('Read Operations', ...)`
 - Conformance: `describe('Offset Validation', ...)`
+- Conformance: `describe('SSE', ...)`
 
 ## Gaps
 
 | Ambiguity | Interpretation | Why Conservative |
 |-----------|----------------|------------------|
 | Long-poll timeout value not specified | Default 30s, configurable via env var | Reasonable default; allows tuning without code changes |
+| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_IDLE_CLOSE_SECS` env var, 0 disables | Spec says SHOULD with ~60s; configurable allows tuning |

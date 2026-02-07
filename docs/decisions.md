@@ -9,6 +9,11 @@ spec sections or conformance tests (or explicit gap references).
 | Decision | Spec/Test Link | Rationale | Date |
 |----------|----------------|-----------|------|
 | Health check at `/healthz` outside `/v1/stream/` namespace | Gap: Not covered by conformance tests | Health checks are infrastructure concern, not part of the protocol API. Keeping separate namespaces prevents confusion and allows protocol versioning without affecting health checks. | 2026-02-06 |
+| SSE event type `data` (not `message`) for stream content | PROTOCOL.md §5.8: "`data`: Emitted for each batch of data" | Matches upstream spec exactly. Standard SSE `message` type is browser default; protocol uses explicit `data` type. | 2026-02-07 |
+| SSE control event uses typed `ControlPayload` struct with serde camelCase | PROTOCOL.md §5.8: "Field names use camelCase: `streamNextOffset`, `streamCursor`, `upToDate`, and `streamClosed`" | Typed struct prevents field name typos and ensures consistent serialization. | 2026-02-07 |
+| Binary detection: everything not `text/*` or `application/json` | PROTOCOL.md §5.8: "For streams with content-type: text/* or application/json, data events carry UTF-8 text directly" | Matches upstream spec exactly. Note: `application/ndjson` is treated as binary per this rule. | 2026-02-07 |
+| One `event: data` per stored message (not concatenated) | Conformance: `should send message events for stream data` | Each message is a distinct SSE event, preserving message boundaries. | 2026-02-07 |
+| SSE idle close default 60s, configurable via `SSE_IDLE_CLOSE_SECS` | PROTOCOL.md §5.8: "Server SHOULD close connections roughly every ~60 seconds"; Gap: `docs/gaps.md#sse-idle-close` | Configurable to allow tuning. 0 disables idle close entirely. | 2026-02-07 |
 
 ## Decision Entry Format
 
