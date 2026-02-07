@@ -127,6 +127,10 @@ fn handle_non_producer_append<S: Storage>(
         next_offset.to_string().parse().unwrap(),
     );
 
+    if should_close {
+        response_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
+    }
+
     Ok((StatusCode::NO_CONTENT, response_headers).into_response())
 }
 

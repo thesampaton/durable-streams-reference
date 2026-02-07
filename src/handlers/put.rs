@@ -147,5 +147,9 @@ pub async fn create_stream<S: Storage>(
     let location = format!("/v1/stream/{name}");
     response_headers.insert("location", location.parse().unwrap());
 
+    if metadata.closed {
+        response_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
+    }
+
     Ok((status, response_headers).into_response())
 }
