@@ -103,3 +103,19 @@ The `Storage` trait defines the core persistence interface. Implementations must
   - `missing_errors_doc` on internal functions (not public API)
   - `module_name_repetitions` when it improves clarity (e.g. `OffsetParser`)
 - Fix clippy before moving to the next task. No "clean up later" debt.
+
+## Related Skills (`.agents/skills/`)
+
+When making code decisions in `src/`, consult these skills for Rust-specific guidance:
+
+| Area | Skill | When |
+|------|-------|------|
+| Ownership & borrows | m01-ownership | Borrow checker errors, ownership design |
+| Smart pointers | m02-resource | Choosing Box/Rc/Arc/Cell/RefCell |
+| Interior mutability | m03-mutability | RwLock/Mutex patterns, Cell/RefCell |
+| Generics & traits | m04-zero-cost | Trait bounds, static vs dynamic dispatch |
+| Type-driven design | m05-type-driven | Newtypes, typestate, validation at construction |
+| Error handling | m06-error-handling | thiserror patterns, Result/Option, ? propagation |
+| Concurrency | m07-concurrency | async/await, Send/Sync, Mutex vs RwLock |
+| Web patterns | domain-web | axum handlers, extractors, middleware, state |
+| Code style | coding-guidelines | Naming, formatting, idiomatic patterns |
