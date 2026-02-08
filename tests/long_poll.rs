@@ -257,7 +257,9 @@ async fn test_long_poll_nonexistent_stream_returns_404() {
     let stream_name = unique_stream_name();
 
     let response = client
-        .get(format!("{base_url}/v1/stream/{stream_name}?live=long-poll"))
+        .get(format!(
+            "{base_url}/v1/stream/{stream_name}?live=long-poll&offset=-1"
+        ))
         .send()
         .await
         .unwrap();
@@ -334,17 +336,12 @@ async fn test_long_poll_includes_stream_cursor() {
         .to_str()
         .unwrap();
 
-    // Cursor should be non-empty (opaque, but we know it's the next_offset)
+    // Cursor should be non-empty and digits-only (opaque monotonic counter)
     assert!(!cursor.is_empty(), "Stream-Cursor should not be empty");
-
-    // Next-Offset and Cursor should match (implementation detail, but verifies consistency)
-    let next_offset = response
-        .headers()
-        .get("Stream-Next-Offset")
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert_eq!(cursor, next_offset);
+    assert!(
+        cursor.chars().all(|c| c.is_ascii_digit()),
+        "Stream-Cursor should be digits only, got: {cursor}"
+    );
 }
 
 /// Validates spec: 03-read-modes.md#long-poll-mode

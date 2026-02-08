@@ -438,9 +438,13 @@ async fn test_sse_json_content_type() {
     let data_events: Vec<_> = events.iter().filter(|e| e.event_type == "data").collect();
     assert!(!data_events.is_empty(), "Expected data events");
 
-    // Data should be parseable as JSON
+    // Data should be parseable as JSON array wrapping the original message
     let parsed: serde_json::Value = serde_json::from_str(&data_events[0].data).unwrap();
-    assert_eq!(parsed["key"], "value");
+    assert!(
+        parsed.is_array(),
+        "SSE JSON data should be wrapped in array"
+    );
+    assert_eq!(parsed[0]["key"], "value");
 }
 
 /// Validates spec: 03-read-modes.md#sse-mode (PROTOCOL.md §5.8)
