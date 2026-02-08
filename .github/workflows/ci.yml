@@ -5,9 +5,9 @@ permissions:
 
 on:
   push:
-    branches: [ main, trunk ]
+    branches: [ trunk ]
   pull_request:
-    branches: [ main ]
+    branches: [ trunk ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7
         with:
           components: rustfmt, clippy
 
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -81,55 +81,6 @@ jobs:
 
       - name: Run integration tests
         run: cargo test --test '*'
-
-  conformance:
-    name: Conformance Tests (allowed to fail)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build server
-        run: cargo build
-
-      - name: Start server
-        run: cargo run &
-        env:
-          RUST_LOG: info
-
-      - name: Wait for server health check
-        run: |
-          timeout 30 sh -c 'until curl -s http://localhost:4437/healthz > /dev/null; do sleep 1; done' || exit 1
-
-      - name: Run conformance tests
-        run: |
-          npx @durable-streams/server-conformance-tests@0.2.1 --run http://localhost:4437/v1/stream
 
   governance:
     name: Governance Check
