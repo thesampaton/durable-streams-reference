@@ -1,7 +1,7 @@
 # durable-streams-rust-server
 
 [![CI](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml)
-[![Conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fthesampaton%2Fdurable-streams-rust-server%2Fbadges%2Fconformance.json)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml)
+[![Conformance](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml)
 
 Reference implementation of the [durable streams protocol](https://github.com/durable-streams/durable-streams), built on [Electric SQL](https://electric-sql.com/).
 
@@ -26,7 +26,7 @@ cargo fmt            # format
 
 This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.1`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md).
 
-Run conformance tests locally (see `/private/tmp/conformance-run` for a working setup):
+Run conformance tests locally:
 
 ```bash
 LONG_POLL_TIMEOUT_SECS=2 SSE_IDLE_CLOSE_SECS=5 cargo run &

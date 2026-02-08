@@ -103,37 +103,3 @@ jobs:
         with:
           name: conformance-results
           path: /tmp/conformance-run/results.json
-
-  update-badge:
-    name: Update Conformance Badge
-    needs: conformance
-    if: github.ref == 'refs/heads/trunk' && always()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: badges
-
-      - name: Download test results
-        uses: actions/download-artifact@v4
-        with:
-          name: conformance-results
-
-      - name: Generate and push badge
-        run: |
-          if [ -f results.json ]; then
-            PASSED=$(jq '.numPassedTests' results.json)
-            TOTAL=$(jq '.numTotalTests' results.json)
-            FAILED=$(jq '.numFailedTests' results.json)
-            if [ "$FAILED" = "0" ]; then COLOR="brightgreen"; else COLOR="red"; fi
-            echo "{\"schemaVersion\":1,\"label\":\"conformance\",\"message\":\"${PASSED}/${TOTAL}\",\"color\":\"${COLOR}\"}" > conformance.json
-          else
-            echo "{\"schemaVersion\":1,\"label\":\"conformance\",\"message\":\"error\",\"color\":\"red\"}" > conformance.json
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add conformance.json
-          git diff --cached --quiet || git commit -m "Update conformance badge [skip ci]"
-          git push
