@@ -40,6 +40,7 @@ move the entry here with a resolution note:
 
 - For decisions based on gaps, see `docs/decisions.md`
 - For blockers related to gaps, see GitHub issues or `docs/blockers.md`
+- For ecosystem interop issues (not spec gaps), see `docs/ecosystem-interop.md`
 - For spec version pinning, see `SPEC_VERSION.md`
 
 ## Proposing Upstream Clarifications

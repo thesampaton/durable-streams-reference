@@ -38,4 +38,5 @@ When adding a decision, include:
 
 - For ambiguities, see `docs/gaps.md`
 - For blockers, see GitHub issues or `docs/blockers.md`
+- For ecosystem interop issues (not protocol decisions), see `docs/ecosystem-interop.md`
 - For version compatibility, see `docs/compatibility.md`
