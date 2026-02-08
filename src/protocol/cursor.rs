@@ -4,66 +4,53 @@
 // requests via the `cursor` query parameter. They enable CDN request
 // collapsing by identifying the stream position.
 //
-// Cursors are monotonically increasing decimal integers (digits only)
-// using a snowflake-style encoding: the upper 42 bits hold milliseconds
-// since a custom epoch (2024-01-01), the lower 10 bits hold a sequence
-// counter. This gives ~139 years of range with 1024 unique values per
-// millisecond, all fitting within JavaScript's MAX_SAFE_INTEGER (2^53-1).
+// The value packs (read_seq, byte_offset) into a single integer that
+// fits within JavaScript's MAX_SAFE_INTEGER (2^53 - 1) so conformance
+// tests can compare cursors via parseInt().
+//
+// Each emitted cursor is strictly greater than the previous one,
+// even when the stream position hasn't changed. This satisfies the
+// "cursor collision with jitter" conformance tests while keeping the
+// offset-derived value as a floor so cursors advance with position.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Custom epoch: 2024-01-01T00:00:00Z in milliseconds since Unix epoch.
-const CUSTOM_EPOCH_MS: u64 = 1_704_067_200_000;
+/// Bits reserved for the byte-offset component.
+///
+/// 27 bits gives a range of 128 MB — well above the per-stream limit.
+const BYTE_OFFSET_BITS: u32 = 27;
 
-/// Number of bits reserved for the within-millisecond sequence.
-const SEQ_BITS: u32 = 10;
+/// Global monotonic cursor counter. Each `generate()` call returns a
+/// value strictly greater than any previously returned cursor.
+static LAST_CURSOR: AtomicU64 = AtomicU64::new(0);
 
-/// Tracks the last generated value to guarantee monotonicity even when
-/// the system clock drifts backward or multiple calls occur within the
-/// same millisecond.
-static LAST_VALUE: AtomicU64 = AtomicU64::new(0);
-
-/// Generate a monotonically increasing cursor value.
+/// Generate a monotonically increasing cursor from stream position.
 ///
-/// Returns a decimal string of digits that is guaranteed to be
-/// strictly greater than any previously generated cursor within
-/// this process lifetime. The value encodes wall-clock time so
-/// cursors from different process restarts are also ordered.
+/// The offset-derived value acts as a floor — when the stream advances
+/// the cursor jumps to at least the new position. Between advances the
+/// cursor still increments so consecutive responses at the same offset
+/// are distinguishable (required for jitter detection).
 ///
-/// The `_next_offset` parameter is accepted for API compatibility
-/// but the cursor value is independent of it.
-///
-/// # Panics
-///
-/// Panics if the system clock is before the Unix epoch.
+/// The value is a decimal integer that fits within JavaScript's
+/// `Number.MAX_SAFE_INTEGER`.
 #[must_use]
-pub fn generate(_next_offset: &crate::protocol::offset::Offset) -> String {
-    #[allow(clippy::cast_possible_truncation)] // millis since epoch fits in u64 until year 584556
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before Unix epoch")
-        .as_millis() as u64;
-
-    let ts = now_ms.saturating_sub(CUSTOM_EPOCH_MS);
-    let base = ts << SEQ_BITS;
-
-    // CAS loop to ensure strict monotonicity
-    loop {
-        let last = LAST_VALUE.load(Ordering::Relaxed);
-        let next = if base > last {
-            base // new millisecond, start at seq 0
-        } else {
-            last + 1 // same or earlier ms, just increment
-        };
-
-        if LAST_VALUE
-            .compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return next.to_string();
+pub fn generate(next_offset: &crate::protocol::offset::Offset) -> String {
+    if let Some((read_seq, byte_offset)) = next_offset.parse_components() {
+        let offset_value = (read_seq << BYTE_OFFSET_BITS) | byte_offset;
+        loop {
+            let last = LAST_CURSOR.load(Ordering::Relaxed);
+            let next = offset_value.max(last + 1);
+            if LAST_CURSOR
+                .compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return next.to_string();
+            }
         }
     }
+
+    // `next_offset` should never be a sentinel, but keep a deterministic fallback.
+    "0".to_string()
 }
 
 #[cfg(test)]
@@ -79,27 +66,40 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_is_monotonic() {
-        let offset = Offset::new(0, 0);
+    fn test_cursor_increases_for_same_offset() {
+        // Consecutive calls at the same offset must still produce
+        // strictly increasing cursors (jitter detection).
+        let offset = Offset::new(7, 42);
         let c1: u64 = generate(&offset).parse().unwrap();
         let c2: u64 = generate(&offset).parse().unwrap();
         assert!(c2 > c1);
     }
 
     #[test]
-    fn test_cursor_fits_in_js_max_safe_integer() {
-        let offset = Offset::new(0, 0);
-        let cursor: u64 = generate(&offset).parse().unwrap();
-        // JavaScript Number.MAX_SAFE_INTEGER = 2^53 - 1
-        assert!(cursor <= (1_u64 << 53) - 1);
+    fn test_cursor_changes_with_offset() {
+        let a = Offset::new(1, 2);
+        let b = Offset::new(1, 3);
+        assert_ne!(generate(&a), generate(&b));
     }
 
     #[test]
-    fn test_cursor_encodes_time() {
-        let offset = Offset::new(0, 0);
+    fn test_cursor_is_monotonic() {
+        // Offsets increase → cursors increase (numerically)
+        let a = Offset::new(1, 5);
+        let b = Offset::new(1, 10);
+        let c = Offset::new(2, 0);
+        let ca: u64 = generate(&a).parse().unwrap();
+        let cb: u64 = generate(&b).parse().unwrap();
+        let cc: u64 = generate(&c).parse().unwrap();
+        assert!(cb > ca);
+        assert!(cc > cb);
+    }
+
+    #[test]
+    fn test_cursor_fits_in_js_max_safe_integer() {
+        // Typical values: read_seq up to ~67M, byte_offset up to 10MB
+        let offset = Offset::new(67_000_000, 10_485_760);
         let cursor: u64 = generate(&offset).parse().unwrap();
-        // Extract timestamp portion: should be reasonable (> 0, i.e. after 2024)
-        let ts = cursor >> SEQ_BITS;
-        assert!(ts > 0, "timestamp portion should be positive");
+        assert!(cursor <= (1_u64 << 53) - 1);
     }
 }

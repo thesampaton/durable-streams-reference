@@ -130,6 +130,15 @@ pub struct StreamMetadata {
     pub created_at: DateTime<Utc>,
 }
 
+/// Result of create-stream operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateStreamResult {
+    /// A new stream was created.
+    Created,
+    /// Stream already existed with matching config (idempotent create).
+    AlreadyExists,
+}
+
 /// Result of an append with producer sequencing.
 ///
 /// Includes a snapshot of stream state taken atomically with the operation
@@ -165,9 +174,10 @@ pub enum ProducerAppendResult {
 pub trait Storage: Send + Sync {
     /// Create a new stream
     ///
-    /// Returns `Ok(())` for idempotent creates with matching config.
+    /// Returns whether the stream was newly created or already existed.
+    ///
     /// Returns `Err(Error::ConfigMismatch)` if stream exists with different config.
-    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<()>;
+    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<CreateStreamResult>;
 
     /// Append data to a stream
     ///

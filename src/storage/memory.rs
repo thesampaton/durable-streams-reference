@@ -1,4 +1,7 @@
-use super::{Message, ProducerAppendResult, ReadResult, Storage, StreamConfig, StreamMetadata};
+use super::{
+    CreateStreamResult, Message, ProducerAppendResult, ReadResult, Storage, StreamConfig,
+    StreamMetadata,
+};
 use crate::protocol::error::{Error, Result};
 use crate::protocol::offset::Offset;
 use crate::protocol::producer::ProducerHeaders;
@@ -123,11 +126,11 @@ impl InMemoryStorage {
         }
     }
 
-    /// Validate and update Stream-Seq on a stream entry.
+    /// Validate Stream-Seq ordering and return a pending value to commit.
     ///
     /// Returns `Err(SeqOrderingViolation)` if the new seq is not strictly
     /// greater than the last seq (lexicographic comparison).
-    fn validate_seq(stream: &mut StreamEntry, seq: Option<&str>) -> Result<()> {
+    fn validate_seq(stream: &StreamEntry, seq: Option<&str>) -> Result<Option<String>> {
         if let Some(new_seq) = seq {
             if let Some(ref last) = stream.last_seq
                 && new_seq <= last.as_str()
@@ -137,9 +140,9 @@ impl InMemoryStorage {
                     received: new_seq.to_string(),
                 });
             }
-            stream.last_seq = Some(new_seq.to_string());
+            return Ok(Some(new_seq.to_string()));
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Commit messages to a stream, checking memory limits first.
@@ -188,7 +191,7 @@ impl InMemoryStorage {
 }
 
 impl Storage for InMemoryStorage {
-    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<()> {
+    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<CreateStreamResult> {
         let mut streams = self.streams.write().expect("streams lock poisoned");
 
         if let Some(stream_arc) = streams.get(name) {
@@ -212,7 +215,7 @@ impl Storage for InMemoryStorage {
                 // Stream is not expired, check for config match
                 if stream.config == config {
                     // Idempotent create with matching config
-                    return Ok(());
+                    return Ok(CreateStreamResult::AlreadyExists);
                 }
                 return Err(Error::ConfigMismatch);
             }
@@ -222,7 +225,7 @@ impl Storage for InMemoryStorage {
         let entry = StreamEntry::new(config);
         streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
 
-        Ok(())
+        Ok(CreateStreamResult::Created)
     }
 
     fn append(&self, name: &str, data: Bytes, content_type: &str) -> Result<Offset> {
@@ -326,10 +329,13 @@ impl Storage for InMemoryStorage {
             });
         }
 
-        // Validate Stream-Seq ordering
-        Self::validate_seq(&mut stream, seq)?;
+        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
+        let pending_seq = Self::validate_seq(&stream, seq)?;
 
         self.commit_messages(&mut stream, messages)?;
+        if let Some(new_seq) = pending_seq {
+            stream.last_seq = Some(new_seq);
+        }
 
         // Return next_offset snapshot from within the lock
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))
@@ -543,10 +549,13 @@ impl Storage for InMemoryStorage {
             }
         }
 
-        // Validate Stream-Seq ordering
-        Self::validate_seq(&mut stream, seq)?;
+        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
+        let pending_seq = Self::validate_seq(&stream, seq)?;
 
         self.commit_messages(&mut stream, messages)?;
+        if let Some(new_seq) = pending_seq {
+            stream.last_seq = Some(new_seq);
+        }
 
         // Close stream if requested (atomic with append)
         if should_close {
@@ -612,11 +621,13 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
 
         // Create stream
-        storage.create_stream("test", config.clone()).unwrap();
+        let result = storage.create_stream("test", config.clone()).unwrap();
+        assert_eq!(result, CreateStreamResult::Created);
         assert!(storage.exists("test"));
 
         // Idempotent create with same config
-        storage.create_stream("test", config).unwrap();
+        let result = storage.create_stream("test", config).unwrap();
+        assert_eq!(result, CreateStreamResult::AlreadyExists);
 
         // Create with different config should fail
         let different_config = StreamConfig::new("application/json".to_string());
@@ -833,6 +844,52 @@ mod tests {
             storage.append("test2", Bytes::from(vec![0u8; 20]), "text/plain"),
             Err(Error::MemoryLimitExceeded)
         ));
+    }
+
+    #[test]
+    fn test_batch_append_does_not_advance_stream_seq_on_failed_commit() {
+        let storage = InMemoryStorage::new(1024, 8);
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.batch_append("test", oversized, "text/plain", Some("s1"));
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = vec![Bytes::from("ok")];
+        let result = storage.batch_append("test", retry, "text/plain", Some("s1"));
+        assert!(result.is_ok(), "retry with same seq should be accepted");
+    }
+
+    #[test]
+    fn test_producer_append_does_not_advance_stream_seq_on_failed_commit() {
+        let storage = InMemoryStorage::new(1024, 8);
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.append_with_producer(
+            "test",
+            oversized,
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = storage.append_with_producer(
+            "test",
+            vec![Bytes::from("ok")],
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(
+            matches!(retry, Ok(ProducerAppendResult::Accepted { .. })),
+            "retry with same producer seq and stream seq should succeed"
+        );
     }
 
     #[test]

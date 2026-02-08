@@ -18,6 +18,7 @@ use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::Instant;
 
 /// Query parameters for GET requests
 #[derive(Debug, Deserialize)]
@@ -278,6 +279,7 @@ fn build_sse_byte_stream<S: Storage + 'static>(
         } else {
             None
         };
+        let mut idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
 
         let keepalive_interval = Duration::from_secs(15);
 
@@ -307,8 +309,8 @@ fn build_sse_byte_stream<S: Storage + 'static>(
                     continue;
                 }
                 () = async {
-                    match idle_timeout {
-                        Some(d) => tokio::time::sleep(d).await,
+                    match idle_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
                         None => std::future::pending().await,
                     }
                 } => {
@@ -328,6 +330,13 @@ fn build_sse_byte_stream<S: Storage + 'static>(
 
             let ctrl = build_sse_control(&rr);
             yield Ok(sse::format_control_frame(&ctrl));
+
+            // Keep idle-close tied to stream activity (new data), not keepalive ticks.
+            if !rr.messages.is_empty()
+                && let Some(timeout) = idle_timeout
+            {
+                idle_deadline = Some(Instant::now() + timeout);
+            }
 
             if rr.closed && rr.at_tail {
                 return;

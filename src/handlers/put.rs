@@ -1,7 +1,7 @@
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::{self, names};
 use crate::protocol::json_mode;
-use crate::storage::{Storage, StreamConfig};
+use crate::storage::{CreateStreamResult, Storage, StreamConfig};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -105,21 +105,17 @@ pub async fn create_stream<S: Storage>(
         config = config.with_created_closed(true);
     }
 
-    // Check if stream existed before create
-    let existed_before = storage.exists(&name);
-
-    // Create stream (returns Ok if idempotent, Err(ConfigMismatch) if conflict)
+    // Create stream (returns created-vs-existing status atomically)
     // Note: create_stream stores config for idempotent checks but does NOT
     // set the closed flag — the handler closes explicitly after any appends.
-    match storage.create_stream(&name, config) {
-        Ok(()) => {} // Success (new or idempotent)
+    let create_result = match storage.create_stream(&name, config) {
+        Ok(result) => result,
         Err(Error::ConfigMismatch) => {
             return Err(Error::ConfigMismatch);
         }
         Err(e) => return Err(e),
-    }
-
-    let is_new = !existed_before;
+    };
+    let is_new = matches!(create_result, CreateStreamResult::Created);
 
     // If new stream and body is non-empty, append initial data
     if is_new && !body_bytes.is_empty() {
