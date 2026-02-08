@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance integration-test integration-test-electric docker docs clean help
+.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-electric docker docs clean help
 
 # Default target
 help:
@@ -18,6 +18,7 @@ help:
 	@echo "  test-unit             - Run unit tests only"
 	@echo "  test-integration      - Run Rust integration tests only"
 	@echo "  conformance           - Run external conformance test suite"
+	@echo "  benchmark             - Run benchmark suite (release build)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-electric - Run Electric integration test (Docker)"
 	@echo ""
@@ -77,6 +78,38 @@ conformance: build $(CONFORMANCE_DIR)/node_modules
 	echo "Stopping server..."; \
 	kill $$SERVER_PID 2>/dev/null || true; \
 	wait $$SERVER_PID 2>/dev/null || true; \
+	exit $$RESULT
+
+# Benchmark target
+# Requires: node, npm
+# On first run, installs the benchmark harness to /tmp/benchmark-run
+# Builds and runs the server with --release for accurate performance numbers
+BENCHMARK_DIR := /tmp/benchmark-run
+BENCHMARK_VERSION := 0.2.1
+
+$(BENCHMARK_DIR)/node_modules: $(BENCHMARK_DIR)/package.json
+	cd $(BENCHMARK_DIR) && npm install
+
+$(BENCHMARK_DIR)/package.json:
+	mkdir -p $(BENCHMARK_DIR)
+	cd $(BENCHMARK_DIR) && npm init -y && npm install @durable-streams/benchmarks@$(BENCHMARK_VERSION)
+	printf 'import { runBenchmarks } from "@durable-streams/benchmarks";\nconst baseUrl = process.env.BENCHMARK_URL;\nif (!baseUrl) throw new Error("BENCHMARK_URL is required");\nrunBenchmarks({ baseUrl, environment: process.env.BENCHMARK_ENV || "local" });\n' > $(BENCHMARK_DIR)/benchmark.bench.mjs
+
+benchmark: release $(BENCHMARK_DIR)/node_modules
+	@echo "Starting server (release build) on port 4437..."
+	@cargo run --release & SERVER_PID=$$!; \
+	echo "Waiting for health check..."; \
+	for i in $$(seq 1 30); do curl -s http://localhost:4437/healthz > /dev/null 2>&1 && break; sleep 1; done; \
+	echo "Running benchmarks..."; \
+	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://localhost:4437 npx vitest bench --reporter=verbose benchmark.bench.mjs; \
+	RESULT=$$?; \
+	echo "Stopping server..."; \
+	kill $$SERVER_PID 2>/dev/null || true; \
+	wait $$SERVER_PID 2>/dev/null || true; \
+	if [ -f $(BENCHMARK_DIR)/benchmark-results.json ]; then \
+		echo ""; \
+		echo "Results saved to $(BENCHMARK_DIR)/benchmark-results.json"; \
+	fi; \
 	exit $$RESULT
 
 # Docker integration test targets (to be implemented)
