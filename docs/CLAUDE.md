@@ -93,6 +93,26 @@ Ambiguity log:
 |-----------|----------------|------------------|-----------------|
 | CORS not covered by conformance | Allow all origins by default, configurable via `CORS_ORIGINS` | Aligns with typical development defaults, restrictable in production | Test OPTIONS preflight with various origin headers |
 
+### `docs/ecosystem-interop.md`
+
+Ecosystem interoperability and ergonomics observations. These are NOT protocol
+spec gaps — the protocol is fine. They are rough edges, non-obvious requirements,
+or atypical patterns in ecosystem components that developers will encounter
+during integration.
+
+Covers two directions:
+- **Downstream:** `@durable-streams/client` SDK talking to the server
+- **Upstream:** server talking to Electric-SQL / Postgres sync layer
+
+Record an observation when:
+- An ecosystem component requires a non-obvious workaround (e.g., redundant hints)
+- An API behaves differently than a developer would reasonably expect
+- A transport or sync abstraction leaks implementation details
+- Integration required trial-and-error that documentation didn't prevent
+
+Each entry includes: what happened, the workaround, why it's atypical, and
+whether it warrants feedback to the component maintainers.
+
 ### `docs/blockers.md` (optional fallback)
 
 If GitHub issues cannot be created via API, log blockers here with the same format

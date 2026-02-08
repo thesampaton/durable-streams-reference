@@ -30,8 +30,10 @@ Durable Streams Server (:4437, internal only)
 | `fixtures/test-key.pem` | RSA 2048 private key (test-only, zero security value) |
 | `fixtures/test-key.pub.pem` | RSA public key |
 | `fixtures/jwks.json` | JWKS document served to Envoy for JWT verification |
-| `generate-token.mjs` | Mints test JWTs for smoke testing |
-| `package.json` | Node.js dependencies (`jose`) |
+| `generate-token.mjs` | CLI wrapper for minting test JWTs |
+| `test-utils.mjs` | Importable `generateToken()` for programmatic JWT creation |
+| `integration.test.mjs` | Vitest e2e test suite (8 scenarios) |
+| `package.json` | Node.js dependencies (`jose`, `@durable-streams/client`, `vitest`) |
 
 ## Quick Start
 
@@ -83,6 +85,33 @@ openssl genrsa -out fixtures/test-key.pem 2048
 openssl rsa -in fixtures/test-key.pem -pubout -out fixtures/test-key.pub.pem
 # Then regenerate fixtures/jwks.json from the public key
 ```
+
+## Integration Tests
+
+Eight e2e test scenarios validate the full authenticated stack using
+`@durable-streams/client` and plain `fetch`:
+
+1. **Health check bypass** — `GET /healthz` without JWT returns 200
+2. **Unauthenticated rejection** — `PUT` without JWT returns 401
+3. **Expired token rejection** — request with expired JWT returns 401
+4. **Create stream** — `DurableStream.create()` with valid JWT succeeds
+5. **Append and read** — append data, read back via client, data matches
+6. **Offset resumption** — read from saved offset resumes without replay
+7. **SSE live subscription** — subscribe, append new data, arrives live
+8. **Delete stream** — delete via client, stream returns 404
+
+### Running the tests
+
+```bash
+# Fully automated (builds Docker, starts stack, runs tests, tears down)
+make integration-test
+
+# Manual (stack already running via docker-compose up -d)
+cd e2e && npm install
+E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose integration.test.mjs
+```
+
+The `E2E_BASE_URL` env var defaults to `http://localhost:8080`.
 
 ## Envoy Configuration
 

@@ -78,6 +78,14 @@ These files MUST exist and be maintained:
 - Ambiguity list + repro notes + proposed clarifying tests
 - Cross-reference any related blocker issues (see `docs/blocker-policy.md`)
 
+### `docs/ecosystem-interop.md`
+
+- Ecosystem interoperability and ergonomics observations (downstream and upstream)
+- NOT protocol gaps — the protocol is fine; these are component integration rough edges
+- **Downstream:** client SDK → server (transport abstractions, API hints, ergonomics)
+- **Upstream:** server → Electric-SQL / Postgres (sync semantics, replication, event sourcing)
+- Each entry: what happened, workaround, why atypical, upstream consideration
+
 ## Enforcement (CI)
 
 CI MUST fail if any of the following are true:

@@ -116,11 +116,20 @@ benchmark: release $(BENCHMARK_DIR)/node_modules
 	fi; \
 	exit $$RESULT
 
-# Docker integration test targets (to be implemented)
-integration-test:
-	@echo "Integration tests not yet implemented"
-	@echo "Will run: docker compose up + authenticated scenario tests"
-	@exit 1
+# End-to-end integration tests against the Docker stack (server + Envoy JWT proxy)
+integration-test: docker
+	@echo "Starting Docker stack..."
+	@docker-compose up -d; \
+	echo "Waiting for health check..."; \
+	for i in $$(seq 1 30); do \
+	  curl -s http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
+	done; \
+	echo "Running integration tests..."; \
+	cd e2e && npm install && npx vitest run --reporter=verbose integration.test.mjs; \
+	RESULT=$$?; \
+	echo "Stopping Docker stack..."; \
+	docker-compose down; \
+	exit $$RESULT
 
 integration-test-electric:
 	@echo "Electric integration tests not yet implemented"

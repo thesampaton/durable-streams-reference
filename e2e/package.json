@@ -1,10 +1,17 @@
 {
-  "name": "durable-streams-auth-test",
+  "name": "durable-streams-e2e",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Test JWT generation for durable-streams auth proxy",
+  "description": "End-to-end integration tests for durable-streams auth proxy stack",
+  "scripts": {
+    "test": "vitest run --reporter=verbose"
+  },
   "dependencies": {
+    "@durable-streams/client": "0.2.1",
     "jose": "^6.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
   }
 }
