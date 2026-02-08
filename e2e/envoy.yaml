@@ -1,0 +1,87 @@
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                # Disable stream idle timeout at connection manager level;
+                # per-route timeouts below handle SSE and long-poll.
+                stream_idle_timeout: 0s
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        # Health check — no auth required
+                        - match:
+                            path: "/healthz"
+                          route:
+                            cluster: durable_streams_server
+                            timeout: 5s
+                        # All other routes — JWT required
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: durable_streams_server
+                            # Disable route timeout for SSE streaming
+                            timeout: 0s
+                            # Longer than server's SSE idle close (60s) and
+                            # long-poll timeout (30s), so the server controls
+                            # connection lifecycle.
+                            idle_timeout: 120s
+                http_filters:
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        durable_streams_provider:
+                          issuer: durable-streams-test
+                          audiences:
+                            - durable-streams
+                          local_jwks:
+                            filename: /etc/envoy/jwks.json
+                          forward: true
+                          claim_to_headers:
+                            - header_name: X-JWT-Sub
+                              claim_name: sub
+                      rules:
+                        # Health check bypass
+                        - match:
+                            path: "/healthz"
+                        # All other routes require JWT
+                        - match:
+                            prefix: "/"
+                          requires:
+                            provider_name: durable_streams_provider
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: durable_streams_server
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: durable_streams_server
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: server
+                      port_value: 4437
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901

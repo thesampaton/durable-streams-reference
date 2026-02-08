@@ -1,0 +1,21 @@
+services:
+  server:
+    build: .
+    environment:
+      PORT: "4437"
+      LONG_POLL_TIMEOUT_SECS: "30"
+      SSE_IDLE_CLOSE_SECS: "60"
+      RUST_LOG: "info"
+    expose:
+      - "4437"
+
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    ports:
+      - "8080:8080"
+      - "9901:9901"
+    volumes:
+      - ./e2e/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./e2e/fixtures/jwks.json:/etc/envoy/jwks.json:ro
+    depends_on:
+      - server

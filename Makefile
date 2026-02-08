@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-electric docker docs clean help
+.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-electric docker docker-up docker-down docs clean help
 
 # Default target
 help:
@@ -22,8 +22,12 @@ help:
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-electric - Run Electric integration test (Docker)"
 	@echo ""
-	@echo "Other:"
+	@echo "Docker:"
 	@echo "  docker                - Build Docker image"
+	@echo "  docker-up             - Start Docker stack (server + Envoy proxy)"
+	@echo "  docker-down           - Stop Docker stack"
+	@echo ""
+	@echo "Other:"
 	@echo "  docs                  - Build documentation"
 	@echo "  clean                 - Clean build artifacts"
 
@@ -123,11 +127,15 @@ integration-test-electric:
 	@echo "Will run: docker compose --profile electric up + postgres insertion tests"
 	@exit 1
 
-# Docker target
+# Docker targets
 docker:
-	@echo "Docker build not yet implemented"
-	@echo "Will build multi-stage Dockerfile"
-	@exit 1
+	docker-compose build
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
 
 # Documentation target
 docs:
