@@ -1,0 +1,10 @@
+{
+  "name": "durable-streams-auth-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Test JWT generation for durable-streams auth proxy",
+  "dependencies": {
+    "jose": "^6.0.0"
+  }
+}

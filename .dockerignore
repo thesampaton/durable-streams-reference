@@ -1,0 +1,15 @@
+target/
+.git/
+e2e/
+scratch/
+docs/
+specs/
+tests/
+.idea/
+.github/
+.claude/
+.agents/
+node_modules/
+*.md
+!Cargo.toml
+!Cargo.lock

@@ -2,3 +2,4 @@
 .idea/
 *.iml
 .claude/settings.local.json
+e2e/node_modules/
