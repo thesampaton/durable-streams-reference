@@ -584,6 +584,66 @@ impl Storage for InMemoryStorage {
         })
     }
 
+    fn create_stream_with_data(
+        &self,
+        name: &str,
+        config: StreamConfig,
+        messages: Vec<Bytes>,
+        should_close: bool,
+    ) -> Result<super::CreateWithDataResult> {
+        let mut streams = self.streams.write().expect("streams lock poisoned");
+
+        if let Some(stream_arc) = streams.get(name) {
+            let stream = stream_arc.read().expect("stream lock poisoned");
+
+            if Self::is_expired(&stream) {
+                // Expired — reclaim memory, then fall through to create new
+                let stream_bytes = stream.total_bytes;
+                drop(stream);
+                streams.remove(name);
+                let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
+                *total = total.saturating_sub(stream_bytes);
+                drop(total);
+            } else if stream.config == config {
+                // Idempotent create — return existing state, ignore body/close
+                let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
+                let closed = stream.closed;
+                return Ok(super::CreateWithDataResult {
+                    status: CreateStreamResult::AlreadyExists,
+                    next_offset,
+                    closed,
+                });
+            } else {
+                return Err(Error::ConfigMismatch);
+            }
+        }
+
+        // Build entry in memory (not yet in the map)
+        let mut entry = StreamEntry::new(config);
+
+        // Append initial data — if this fails the entry is never inserted
+        if !messages.is_empty() {
+            self.commit_messages(&mut entry, messages)?;
+        }
+
+        // Close atomically with creation
+        if should_close {
+            entry.closed = true;
+        }
+
+        // Snapshot state before inserting
+        let next_offset = Offset::new(entry.next_read_seq, entry.next_byte_offset);
+        let closed = entry.closed;
+
+        streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
+
+        Ok(super::CreateWithDataResult {
+            status: CreateStreamResult::Created,
+            next_offset,
+            closed,
+        })
+    }
+
     fn exists(&self, name: &str) -> bool {
         let streams = self.streams.read().expect("streams lock poisoned");
         if let Some(stream_arc) = streams.get(name) {
@@ -890,6 +950,83 @@ mod tests {
             matches!(retry, Ok(ProducerAppendResult::Accepted { .. })),
             "retry with same producer seq and stream seq should succeed"
         );
+    }
+
+    #[test]
+    fn test_create_with_data_rolls_back_on_memory_limit() {
+        // P1: if commit_messages fails, the stream must not exist
+        let storage = InMemoryStorage::new(1024, 8);
+        let config = StreamConfig::new("text/plain".to_string());
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+
+        let err = storage.create_stream_with_data("test", config, oversized, false);
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+        assert!(
+            !storage.exists("test"),
+            "stream must not exist after failed create"
+        );
+    }
+
+    #[test]
+    fn test_create_with_data_closed_is_atomic() {
+        // P2: created_closed must be set before the entry is visible
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
+
+        let result = storage
+            .create_stream_with_data("test", config, vec![], true)
+            .unwrap();
+        assert_eq!(result.status, CreateStreamResult::Created);
+        assert!(result.closed, "stream must be closed in result snapshot");
+
+        // Verify via head() as well
+        let meta = storage.head("test").unwrap();
+        assert!(meta.closed, "stream must be closed via head()");
+
+        // Appends must be rejected
+        assert!(matches!(
+            storage.append("test", Bytes::from("data"), "text/plain"),
+            Err(Error::StreamClosed)
+        ));
+    }
+
+    #[test]
+    fn test_create_with_data_appends_and_closes() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
+        let messages = vec![Bytes::from("hello"), Bytes::from("world")];
+
+        let result = storage
+            .create_stream_with_data("test", config, messages, true)
+            .unwrap();
+        assert_eq!(result.status, CreateStreamResult::Created);
+        assert!(result.closed);
+
+        let meta = storage.head("test").unwrap();
+        assert_eq!(meta.message_count, 2);
+        assert!(meta.closed);
+    }
+
+    #[test]
+    fn test_create_with_data_idempotent_ignores_body() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+
+        // First create with data
+        let r1 = storage
+            .create_stream_with_data("test", config.clone(), vec![Bytes::from("a")], false)
+            .unwrap();
+        assert_eq!(r1.status, CreateStreamResult::Created);
+
+        // Idempotent recreate — body must be ignored
+        let r2 = storage
+            .create_stream_with_data("test", config, vec![Bytes::from("b")], false)
+            .unwrap();
+        assert_eq!(r2.status, CreateStreamResult::AlreadyExists);
+
+        // Only 1 message from first create
+        let meta = storage.head("test").unwrap();
+        assert_eq!(meta.message_count, 1);
     }
 
     #[test]

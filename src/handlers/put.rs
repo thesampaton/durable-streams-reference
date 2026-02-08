@@ -1,7 +1,7 @@
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::{self, names};
 use crate::protocol::json_mode;
-use crate::storage::{CreateStreamResult, Storage, StreamConfig};
+use crate::storage::{CreateStreamResult, CreateWithDataResult, Storage, StreamConfig};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -105,41 +105,27 @@ pub async fn create_stream<S: Storage>(
         config = config.with_created_closed(true);
     }
 
-    // Create stream (returns created-vs-existing status atomically)
-    // Note: create_stream stores config for idempotent checks but does NOT
-    // set the closed flag — the handler closes explicitly after any appends.
-    let create_result = match storage.create_stream(&name, config) {
-        Ok(result) => result,
-        Err(Error::ConfigMismatch) => {
-            return Err(Error::ConfigMismatch);
-        }
-        Err(e) => return Err(e),
+    // Parse body into messages BEFORE creating the stream so that
+    // failures (e.g. invalid JSON) never leave an orphaned stream.
+    let messages = if body_bytes.is_empty() {
+        vec![]
+    } else if json_mode::is_json_content_type(&normalized_ct) {
+        // Empty JSON arrays produce no messages — that's fine for PUT
+        json_mode::process_append(&body_bytes)?
+    } else {
+        vec![body_bytes]
     };
-    let is_new = matches!(create_result, CreateStreamResult::Created);
 
-    // If new stream and body is non-empty, append initial data
-    if is_new && !body_bytes.is_empty() {
-        let messages = if json_mode::is_json_content_type(&normalized_ct) {
-            // Empty JSON arrays produce no messages — that's fine for PUT
-            json_mode::process_append(&body_bytes)?
-        } else {
-            vec![body_bytes]
-        };
+    // Atomic create + append + close. If commit_messages fails (e.g.
+    // memory limit), the stream is never inserted. If created_closed,
+    // the entry is closed before it becomes visible to other operations.
+    let CreateWithDataResult {
+        status: create_status,
+        next_offset,
+        closed,
+    } = storage.create_stream_with_data(&name, config, messages, created_closed)?;
 
-        if !messages.is_empty() {
-            storage.batch_append(&name, messages, &normalized_ct, None)?;
-        }
-    }
-
-    // Close stream after appending data (if created_closed)
-    if is_new && created_closed {
-        storage.close_stream(&name)?;
-    }
-
-    // Get metadata for response headers (snapshot after any appends)
-    let metadata = storage.head(&name)?;
-
-    let status = if is_new {
+    let status = if matches!(create_status, CreateStreamResult::Created) {
         StatusCode::CREATED
     } else {
         StatusCode::OK
@@ -152,11 +138,11 @@ pub async fn create_stream<S: Storage>(
     response_headers.insert("content-type", normalized_ct.parse().unwrap());
     response_headers.insert(
         names::STREAM_NEXT_OFFSET,
-        metadata.next_offset.to_string().parse().unwrap(),
+        next_offset.to_string().parse().unwrap(),
     );
     response_headers.insert("location", location.parse().unwrap());
 
-    if metadata.closed {
+    if closed {
         response_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
     }
 
