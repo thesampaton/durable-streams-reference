@@ -53,15 +53,26 @@ test-integration:
 	cargo test --test '*'
 
 # Conformance test target
-# Requires: npm, @durable-streams/server-conformance-tests
-conformance: build
+# Requires: node, npm
+# On first run, installs the conformance harness to /tmp/conformance-run
+CONFORMANCE_DIR := /tmp/conformance-run
+CONFORMANCE_VERSION := 0.2.1
+
+$(CONFORMANCE_DIR)/node_modules: $(CONFORMANCE_DIR)/package.json
+	cd $(CONFORMANCE_DIR) && npm install
+
+$(CONFORMANCE_DIR)/package.json:
+	mkdir -p $(CONFORMANCE_DIR)
+	cd $(CONFORMANCE_DIR) && npm init -y && npm install @durable-streams/server-conformance-tests@$(CONFORMANCE_VERSION)
+	printf 'import { runConformanceTests } from "@durable-streams/server-conformance-tests";\nconst baseUrl = process.env.CONFORMANCE_TEST_URL;\nif (!baseUrl) throw new Error("CONFORMANCE_TEST_URL is required");\nrunConformanceTests({ baseUrl, longPollTimeoutMs: 2000 });\n' > $(CONFORMANCE_DIR)/conformance.test.mjs
+
+conformance: build $(CONFORMANCE_DIR)/node_modules
 	@echo "Starting server on port 4437..."
-	@cargo run & SERVER_PID=$$!; \
-	sleep 2; \
+	@LONG_POLL_TIMEOUT_SECS=2 cargo run & SERVER_PID=$$!; \
 	echo "Waiting for health check..."; \
-	timeout 10 sh -c 'until curl -s http://localhost:4437/healthz > /dev/null; do sleep 0.5; done' || (kill $$SERVER_PID 2>/dev/null; echo "Server failed to start"; exit 1); \
+	for i in $$(seq 1 30); do curl -s http://localhost:4437/healthz > /dev/null 2>&1 && break; sleep 1; done; \
 	echo "Running conformance tests..."; \
-	npx @durable-streams/server-conformance-tests --run http://localhost:4437/v1/stream; \
+	cd $(CONFORMANCE_DIR) && CONFORMANCE_TEST_URL=http://localhost:4437 npx vitest run --reporter=verbose conformance.test.mjs; \
 	RESULT=$$?; \
 	echo "Stopping server..."; \
 	kill $$SERVER_PID 2>/dev/null || true; \
