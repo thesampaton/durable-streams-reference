@@ -1,0 +1,139 @@
+name: Conformance
+
+on:
+  push:
+    branches: [ trunk ]
+  pull_request:
+    branches: [ trunk ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build server
+        run: cargo build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-binary
+          path: target/debug/durable-streams-rust-server
+
+  conformance:
+    name: Protocol Conformance Tests
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: server-binary
+
+      - name: Start server
+        run: |
+          chmod +x durable-streams-rust-server
+          ./durable-streams-rust-server &
+        env:
+          LONG_POLL_TIMEOUT_SECS: '2'
+          SSE_IDLE_CLOSE_SECS: '5'
+          RUST_LOG: warn
+
+      - name: Wait for server health check
+        run: |
+          timeout 30 sh -c 'until curl -s http://localhost:4437/healthz > /dev/null; do sleep 1; done' || exit 1
+
+      - name: Setup conformance test harness
+        run: |
+          mkdir -p /tmp/conformance-run
+          cd /tmp/conformance-run
+          npm init -y
+          npm install @durable-streams/server-conformance-tests@0.2.1
+          cat > conformance.test.mjs << 'TESTEOF'
+          import { runConformanceTests } from "@durable-streams/server-conformance-tests";
+          runConformanceTests({ baseUrl: process.env.CONFORMANCE_TEST_URL, longPollTimeoutMs: 2000 });
+          TESTEOF
+
+      - name: Run conformance tests
+        working-directory: /tmp/conformance-run
+        env:
+          CONFORMANCE_TEST_URL: http://localhost:4437
+        run: npx vitest run conformance.test.mjs --reporter=default --reporter=json --outputFile=results.json
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results
+          path: /tmp/conformance-run/results.json
+
+  update-badge:
+    name: Update Conformance Badge
+    needs: conformance
+    if: github.ref == 'refs/heads/trunk' && always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: badges
+
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          name: conformance-results
+
+      - name: Generate and push badge
+        run: |
+          if [ -f results.json ]; then
+            PASSED=$(jq '.numPassedTests' results.json)
+            TOTAL=$(jq '.numTotalTests' results.json)
+            FAILED=$(jq '.numFailedTests' results.json)
+            if [ "$FAILED" = "0" ]; then COLOR="brightgreen"; else COLOR="red"; fi
+            echo "{\"schemaVersion\":1,\"label\":\"conformance\",\"message\":\"${PASSED}/${TOTAL}\",\"color\":\"${COLOR}\"}" > conformance.json
+          else
+            echo "{\"schemaVersion\":1,\"label\":\"conformance\",\"message\":\"error\",\"color\":\"red\"}" > conformance.json
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add conformance.json
+          git diff --cached --quiet || git commit -m "Update conformance badge [skip ci]"
+          git push
