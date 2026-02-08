@@ -4,8 +4,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [ trunk ]
   pull_request:
     branches: [ trunk ]
 
