@@ -1,5 +1,6 @@
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::{self, names};
+use crate::protocol::json_mode;
 use crate::storage::{Storage, StreamConfig};
 use axum::{
     body::Body,
@@ -14,10 +15,11 @@ use std::sync::Arc;
 ///
 /// Creates a new stream with the specified configuration.
 /// Returns 201 Created for new streams, 200 OK for idempotent recreates.
+/// Optionally accepts a body with initial data for the stream.
 ///
 /// # Errors
 ///
-/// Returns error if Content-Type is missing/empty, body is non-empty,
+/// Returns error if Content-Type is explicitly provided but empty,
 /// both TTL and Expires-At are provided, TTL format is invalid, or stream
 /// exists with different configuration.
 ///
@@ -31,7 +33,7 @@ pub async fn create_stream<S: Storage>(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response> {
-    // Reject non-empty body (PUT should have no body)
+    // Read body (PUT may include initial data)
     let body_bytes =
         axum::body::to_bytes(body, usize::MAX)
             .await
@@ -40,31 +42,23 @@ pub async fn create_stream<S: Storage>(
                 reason: format!("Failed to read body: {e}"),
             })?;
 
-    if !body_bytes.is_empty() {
-        return Err(Error::InvalidHeader {
-            header: "Content-Length".to_string(),
-            reason: "PUT requests must have empty body".to_string(),
-        });
-    }
+    // Parse Content-Type: optional, defaults to application/octet-stream
+    let content_type = headers.get("content-type").and_then(|v| v.to_str().ok());
 
-    // Parse Content-Type (required)
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| Error::InvalidHeader {
-            header: "Content-Type".to_string(),
-            reason: "missing required header".to_string(),
-        })?;
-
-    if content_type.trim().is_empty() {
+    // Reject explicitly-provided but empty Content-Type
+    if let Some(ct) = content_type
+        && ct.trim().is_empty()
+    {
         return Err(Error::InvalidHeader {
             header: "Content-Type".to_string(),
             reason: "empty value".to_string(),
         });
     }
 
-    // Normalize content type (lowercase, strip charset)
-    let normalized_ct = headers::normalize_content_type(content_type);
+    let normalized_ct = content_type.map_or_else(
+        || "application/octet-stream".to_string(),
+        headers::normalize_content_type,
+    );
 
     // Parse optional TTL
     let ttl_seconds =
@@ -99,7 +93,6 @@ pub async fn create_stream<S: Storage>(
     let mut config = StreamConfig::new(normalized_ct.clone());
 
     if let Some(ttl) = ttl_seconds {
-        // Calculate absolute expiration from TTL
         let expires_at =
             Utc::now() + chrono::Duration::seconds(i64::try_from(ttl).unwrap_or(i64::MAX));
         config = config.with_expires_at(expires_at);
@@ -116,10 +109,11 @@ pub async fn create_stream<S: Storage>(
     let existed_before = storage.exists(&name);
 
     // Create stream (returns Ok if idempotent, Err(ConfigMismatch) if conflict)
+    // Note: create_stream stores config for idempotent checks but does NOT
+    // set the closed flag — the handler closes explicitly after any appends.
     match storage.create_stream(&name, config) {
         Ok(()) => {} // Success (new or idempotent)
         Err(Error::ConfigMismatch) => {
-            // Stream exists with different config
             return Err(Error::ConfigMismatch);
         }
         Err(e) => return Err(e),
@@ -127,15 +121,36 @@ pub async fn create_stream<S: Storage>(
 
     let is_new = !existed_before;
 
-    // Get metadata for response headers
+    // If new stream and body is non-empty, append initial data
+    if is_new && !body_bytes.is_empty() {
+        let messages = if json_mode::is_json_content_type(&normalized_ct) {
+            // Empty JSON arrays produce no messages — that's fine for PUT
+            json_mode::process_append(&body_bytes)?
+        } else {
+            vec![body_bytes]
+        };
+
+        if !messages.is_empty() {
+            storage.batch_append(&name, messages, &normalized_ct, None)?;
+        }
+    }
+
+    // Close stream after appending data (if created_closed)
+    if is_new && created_closed {
+        storage.close_stream(&name)?;
+    }
+
+    // Get metadata for response headers (snapshot after any appends)
     let metadata = storage.head(&name)?;
 
-    // Build response
     let status = if is_new {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
+
+    // Build absolute Location URL
+    let location = build_location_url(&headers, &name);
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert("content-type", normalized_ct.parse().unwrap());
@@ -143,8 +158,6 @@ pub async fn create_stream<S: Storage>(
         names::STREAM_NEXT_OFFSET,
         metadata.next_offset.to_string().parse().unwrap(),
     );
-    // Location header (only for 201 Created, but include for both per spec behavior)
-    let location = format!("/v1/stream/{name}");
     response_headers.insert("location", location.parse().unwrap());
 
     if metadata.closed {
@@ -152,4 +165,22 @@ pub async fn create_stream<S: Storage>(
     }
 
     Ok((status, response_headers).into_response())
+}
+
+/// Build an absolute Location URL from request headers.
+///
+/// Uses `Host` header for the authority and `X-Forwarded-Proto` for the scheme.
+/// Falls back to `http` and `localhost` when headers are absent.
+fn build_location_url(headers: &HeaderMap, name: &str) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+
+    format!("{scheme}://{host}/v1/stream/{name}")
 }
