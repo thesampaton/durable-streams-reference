@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 /// DELETE handler for deleting streams
 ///
-/// Deletes a stream and all its data. Idempotent - returns 204 even if
-/// stream doesn't exist.
+/// Deletes a stream and all its data. Returns 204 on success.
+/// Returns 404 if the stream does not exist.
 ///
 /// # Errors
 ///
-/// Returns error only for internal storage failures (not for missing streams).
+/// Returns `Error::NotFound` if the stream does not exist.
 pub async fn delete_stream<S: Storage>(
     State(storage): State<Arc<S>>,
     Path(name): Path<String>,

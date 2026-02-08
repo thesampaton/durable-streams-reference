@@ -10,7 +10,13 @@ use tokio::sync::broadcast;
 /// Stream configuration
 ///
 /// Immutable configuration set at stream creation time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Custom `PartialEq`: when `ttl_seconds` is `Some`, `expires_at` is
+/// derived from `Utc::now()` and will drift between requests.  The
+/// comparison therefore ignores `expires_at` in that case.  When
+/// `ttl_seconds` is `None` and `expires_at` was set directly (via
+/// `Expires-At` header), the parsed timestamp is stable so we compare it.
+#[derive(Debug, Clone, Eq)]
 pub struct StreamConfig {
     /// Content-Type header value (normalized, lowercase)
     pub content_type: String,
@@ -20,6 +26,20 @@ pub struct StreamConfig {
     pub expires_at: Option<DateTime<Utc>>,
     /// Whether the stream was created closed
     pub created_closed: bool,
+}
+
+impl PartialEq for StreamConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.content_type == other.content_type
+            && self.ttl_seconds == other.ttl_seconds
+            && self.created_closed == other.created_closed
+            && if self.ttl_seconds.is_some() {
+                // TTL-derived expires_at drifts with Utc::now(); skip comparison
+                true
+            } else {
+                self.expires_at == other.expires_at
+            }
+    }
 }
 
 impl StreamConfig {
@@ -165,10 +185,20 @@ pub trait Storage: Send + Sync {
     /// Returns the next offset (the offset that will be assigned to the
     /// next message appended after this batch).
     ///
+    /// If `seq` is `Some`, validates lexicographic ordering against the
+    /// stream's last seq and updates it on success.
+    ///
     /// Returns `Err(Error::StreamClosed)` if stream is closed.
     /// Returns `Err(Error::ContentTypeMismatch)` if content type doesn't match.
+    /// Returns `Err(Error::SeqOrderingViolation)` if seq <= last seq.
     /// Returns `Err(Error::MemoryLimitExceeded)` if batch would exceed limits.
-    fn batch_append(&self, name: &str, messages: Vec<Bytes>, content_type: &str) -> Result<Offset>;
+    fn batch_append(
+        &self,
+        name: &str,
+        messages: Vec<Bytes>,
+        content_type: &str,
+        seq: Option<&str>,
+    ) -> Result<Offset>;
 
     /// Read messages from a stream starting at offset
     ///
@@ -181,7 +211,8 @@ pub trait Storage: Send + Sync {
 
     /// Delete a stream
     ///
-    /// Returns `Ok(())` even if stream doesn't exist (idempotent).
+    /// Returns `Ok(())` on successful deletion.
+    /// Returns `Err(Error::NotFound)` if stream doesn't exist.
     fn delete(&self, name: &str) -> Result<()>;
 
     /// Get stream metadata
@@ -213,6 +244,7 @@ pub trait Storage: Send + Sync {
         content_type: &str,
         producer: &ProducerHeaders,
         should_close: bool,
+        seq: Option<&str>,
     ) -> Result<ProducerAppendResult>;
 
     /// Check if a stream exists

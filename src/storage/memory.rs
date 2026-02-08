@@ -35,23 +35,26 @@ struct StreamEntry {
     producers: HashMap<String, ProducerState>,
     /// Broadcast sender for notifying long-poll/SSE subscribers
     notify: broadcast::Sender<()>,
+    /// Last Stream-Seq value received (lexicographic ordering)
+    last_seq: Option<String>,
 }
 
 impl StreamEntry {
     fn new(config: StreamConfig) -> Self {
-        // Initialize closed flag from config
-        let closed = config.created_closed;
+        // Stream starts open; the handler closes it after any initial appends.
+        // The `created_closed` flag in config is stored for idempotent checks only.
         let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
         Self {
             config,
             messages: Vec::new(),
-            closed,
+            closed: false,
             next_read_seq: 0,
             next_byte_offset: 0,
             total_bytes: 0,
             created_at: Utc::now(),
             producers: HashMap::new(),
             notify,
+            last_seq: None,
         }
     }
 
@@ -118,6 +121,25 @@ impl InMemoryStorage {
         } else {
             false
         }
+    }
+
+    /// Validate and update Stream-Seq on a stream entry.
+    ///
+    /// Returns `Err(SeqOrderingViolation)` if the new seq is not strictly
+    /// greater than the last seq (lexicographic comparison).
+    fn validate_seq(stream: &mut StreamEntry, seq: Option<&str>) -> Result<()> {
+        if let Some(new_seq) = seq {
+            if let Some(ref last) = stream.last_seq
+                && new_seq <= last.as_str()
+            {
+                return Err(Error::SeqOrderingViolation {
+                    last: last.clone(),
+                    received: new_seq.to_string(),
+                });
+            }
+            stream.last_seq = Some(new_seq.to_string());
+        }
+        Ok(())
     }
 
     /// Commit messages to a stream, checking memory limits first.
@@ -263,7 +285,13 @@ impl Storage for InMemoryStorage {
         Ok(offset)
     }
 
-    fn batch_append(&self, name: &str, messages: Vec<Bytes>, content_type: &str) -> Result<Offset> {
+    fn batch_append(
+        &self,
+        name: &str,
+        messages: Vec<Bytes>,
+        content_type: &str,
+        seq: Option<&str>,
+    ) -> Result<Offset> {
         if messages.is_empty() {
             return Err(Error::InvalidHeader {
                 header: "Content-Length".to_string(),
@@ -297,6 +325,9 @@ impl Storage for InMemoryStorage {
                 actual: content_type.to_string(),
             });
         }
+
+        // Validate Stream-Seq ordering
+        Self::validate_seq(&mut stream, seq)?;
 
         self.commit_messages(&mut stream, messages)?;
 
@@ -368,10 +399,10 @@ impl Storage for InMemoryStorage {
             let stream = stream_arc.read().expect("stream lock poisoned");
             let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
             *total = total.saturating_sub(stream.total_bytes);
+            Ok(())
+        } else {
+            Err(Error::NotFound(name.to_string()))
         }
-
-        // Idempotent - Ok even if stream didn't exist
-        Ok(())
     }
 
     fn head(&self, name: &str) -> Result<StreamMetadata> {
@@ -423,6 +454,7 @@ impl Storage for InMemoryStorage {
         content_type: &str,
         producer: &ProducerHeaders,
         should_close: bool,
+        seq: Option<&str>,
     ) -> Result<ProducerAppendResult> {
         let stream_arc = self
             .get_stream(name)
@@ -439,14 +471,16 @@ impl Storage for InMemoryStorage {
         // Lazy cleanup of stale producer state
         stream.cleanup_stale_producers();
 
-        // Check content type match
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
+        // Check content type match (only when there are messages to append)
+        if !messages.is_empty() {
+            let normalized_ct = content_type.to_lowercase();
+            let expected_ct = stream.config.content_type.to_lowercase();
+            if normalized_ct != expected_ct {
+                return Err(Error::ContentTypeMismatch {
+                    expected: stream.config.content_type.clone(),
+                    actual: content_type.to_string(),
+                });
+            }
         }
 
         // --- Producer validation (atomic with append) ---
@@ -508,6 +542,9 @@ impl Storage for InMemoryStorage {
                 });
             }
         }
+
+        // Validate Stream-Seq ordering
+        Self::validate_seq(&mut stream, seq)?;
 
         self.commit_messages(&mut stream, messages)?;
 
@@ -818,8 +855,8 @@ mod tests {
         let bytes_after = storage.total_bytes();
         assert_eq!(bytes_after, 0);
 
-        // Idempotent delete
-        storage.delete("test").unwrap();
+        // Delete non-existent returns NotFound
+        assert!(matches!(storage.delete("test"), Err(Error::NotFound(_))));
     }
 
     #[test]
@@ -867,6 +904,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -894,6 +932,7 @@ mod tests {
                     "text/plain",
                     &producer("p1", 0, s),
                     false,
+                    None,
                 )
                 .unwrap();
             assert!(matches!(
@@ -921,6 +960,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -932,6 +972,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -962,6 +1003,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -973,6 +1015,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -999,6 +1042,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1010,6 +1054,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1037,6 +1082,7 @@ mod tests {
                     "text/plain",
                     &producer("p1", 0, seq),
                     false,
+                    None,
                 )
                 .unwrap();
         }
@@ -1049,6 +1095,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1075,6 +1122,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1085,6 +1133,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1104,6 +1153,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1136,6 +1186,7 @@ mod tests {
                 "text/plain",
                 &producer("a", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1147,6 +1198,7 @@ mod tests {
                 "text/plain",
                 &producer("b", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1158,6 +1210,7 @@ mod tests {
                 "text/plain",
                 &producer("a", 0, 1),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1179,6 +1232,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1190,6 +1244,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1212,6 +1267,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 3),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1272,6 +1328,7 @@ mod tests {
                             "text/plain",
                             &producer(&prod_id, 0, seq),
                             false,
+                            None,
                         );
                         assert!(
                             result.is_ok(),

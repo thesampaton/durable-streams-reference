@@ -81,6 +81,10 @@ pub enum Error {
     /// Invalid header value (400)
     #[error("Invalid header value for {header}: {reason}")]
     InvalidHeader { header: String, reason: String },
+
+    /// Stream-Seq ordering violation (409)
+    #[error("Stream-Seq ordering violation: last={last}, received={received}")]
+    SeqOrderingViolation { last: String, received: String },
 }
 
 impl Error {
@@ -96,7 +100,8 @@ impl Error {
             | Self::ContentTypeMismatch { .. }
             | Self::StreamClosed
             | Self::SequenceRegression { .. }
-            | Self::SequenceGap { .. } => 409,
+            | Self::SequenceGap { .. }
+            | Self::SeqOrderingViolation { .. } => 409,
             Self::EpochFenced { .. } => 403,
             Self::MemoryLimitExceeded | Self::StreamSizeLimitExceeded => 413,
             Self::AlreadyExists(_)
