@@ -96,13 +96,16 @@ Stream-Next-Offset: 0000000000000000_0000000000000000
 
 ### Response
 
-**204 No Content** - Stream deleted (or didn't exist - idempotent)
+**204 No Content** - Stream deleted successfully
+
+**404 Not Found** - Stream does not exist
 
 ### Behavior
 
 The server MUST:
-- Return 204 even if stream doesn't exist (idempotent operation)
-- Remove all stream data and metadata
+- Return 204 on successful deletion of an existing stream
+- Return 404 if the stream does not exist
+- Remove all stream data and metadata on successful deletion
 - Allow recreating stream with same name but potentially different config
 
 ## Stream Metadata (HEAD)

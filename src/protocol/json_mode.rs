@@ -6,13 +6,11 @@ use serde_json::Value;
 ///
 /// If the input is a JSON array, returns each element as a separate message.
 /// If the input is a single JSON value, returns it as one message.
-/// Empty arrays are rejected with an error.
+/// Empty arrays return `Ok(vec![])` — callers decide whether that's an error.
 ///
 /// # Errors
 ///
-/// Returns `Error::InvalidJson` if:
-/// - Input is not valid JSON
-/// - Input is an empty array
+/// Returns `Error::InvalidJson` if input is not valid JSON.
 ///
 /// # Panics
 ///
@@ -23,11 +21,9 @@ pub fn process_append(data: &[u8]) -> Result<Vec<Bytes>> {
         serde_json::from_slice(data).map_err(|e| Error::InvalidJson(e.to_string()))?;
 
     if let Value::Array(arr) = value {
-        // Reject empty arrays
+        // Empty arrays return empty vec — caller decides policy
         if arr.is_empty() {
-            return Err(Error::InvalidJson(
-                "empty arrays are not permitted".to_string(),
-            ));
+            return Ok(vec![]);
         }
 
         // Flatten array: each element becomes a separate message
@@ -112,11 +108,10 @@ mod tests {
     }
 
     #[test]
-    fn test_process_append_empty_array_rejected() {
+    fn test_process_append_empty_array_returns_empty_vec() {
         let data = b"[]";
-        let result = process_append(data);
-
-        assert!(matches!(result, Err(Error::InvalidJson(_))));
+        let result = process_append(data).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

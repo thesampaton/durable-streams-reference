@@ -1,4 +1,7 @@
-use super::{Message, ProducerAppendResult, ReadResult, Storage, StreamConfig, StreamMetadata};
+use super::{
+    CreateStreamResult, Message, ProducerAppendResult, ReadResult, Storage, StreamConfig,
+    StreamMetadata,
+};
 use crate::protocol::error::{Error, Result};
 use crate::protocol::offset::Offset;
 use crate::protocol::producer::ProducerHeaders;
@@ -35,23 +38,26 @@ struct StreamEntry {
     producers: HashMap<String, ProducerState>,
     /// Broadcast sender for notifying long-poll/SSE subscribers
     notify: broadcast::Sender<()>,
+    /// Last Stream-Seq value received (lexicographic ordering)
+    last_seq: Option<String>,
 }
 
 impl StreamEntry {
     fn new(config: StreamConfig) -> Self {
-        // Initialize closed flag from config
-        let closed = config.created_closed;
+        // Stream starts open; the handler closes it after any initial appends.
+        // The `created_closed` flag in config is stored for idempotent checks only.
         let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
         Self {
             config,
             messages: Vec::new(),
-            closed,
+            closed: false,
             next_read_seq: 0,
             next_byte_offset: 0,
             total_bytes: 0,
             created_at: Utc::now(),
             producers: HashMap::new(),
             notify,
+            last_seq: None,
         }
     }
 
@@ -120,6 +126,25 @@ impl InMemoryStorage {
         }
     }
 
+    /// Validate Stream-Seq ordering and return a pending value to commit.
+    ///
+    /// Returns `Err(SeqOrderingViolation)` if the new seq is not strictly
+    /// greater than the last seq (lexicographic comparison).
+    fn validate_seq(stream: &StreamEntry, seq: Option<&str>) -> Result<Option<String>> {
+        if let Some(new_seq) = seq {
+            if let Some(ref last) = stream.last_seq
+                && new_seq <= last.as_str()
+            {
+                return Err(Error::SeqOrderingViolation {
+                    last: last.clone(),
+                    received: new_seq.to_string(),
+                });
+            }
+            return Ok(Some(new_seq.to_string()));
+        }
+        Ok(None)
+    }
+
     /// Commit messages to a stream, checking memory limits first.
     ///
     /// Caller must hold the stream write lock. Updates both stream-level
@@ -166,7 +191,7 @@ impl InMemoryStorage {
 }
 
 impl Storage for InMemoryStorage {
-    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<()> {
+    fn create_stream(&self, name: &str, config: StreamConfig) -> Result<CreateStreamResult> {
         let mut streams = self.streams.write().expect("streams lock poisoned");
 
         if let Some(stream_arc) = streams.get(name) {
@@ -190,7 +215,7 @@ impl Storage for InMemoryStorage {
                 // Stream is not expired, check for config match
                 if stream.config == config {
                     // Idempotent create with matching config
-                    return Ok(());
+                    return Ok(CreateStreamResult::AlreadyExists);
                 }
                 return Err(Error::ConfigMismatch);
             }
@@ -200,7 +225,7 @@ impl Storage for InMemoryStorage {
         let entry = StreamEntry::new(config);
         streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
 
-        Ok(())
+        Ok(CreateStreamResult::Created)
     }
 
     fn append(&self, name: &str, data: Bytes, content_type: &str) -> Result<Offset> {
@@ -263,7 +288,13 @@ impl Storage for InMemoryStorage {
         Ok(offset)
     }
 
-    fn batch_append(&self, name: &str, messages: Vec<Bytes>, content_type: &str) -> Result<Offset> {
+    fn batch_append(
+        &self,
+        name: &str,
+        messages: Vec<Bytes>,
+        content_type: &str,
+        seq: Option<&str>,
+    ) -> Result<Offset> {
         if messages.is_empty() {
             return Err(Error::InvalidHeader {
                 header: "Content-Length".to_string(),
@@ -298,7 +329,13 @@ impl Storage for InMemoryStorage {
             });
         }
 
+        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
+        let pending_seq = Self::validate_seq(&stream, seq)?;
+
         self.commit_messages(&mut stream, messages)?;
+        if let Some(new_seq) = pending_seq {
+            stream.last_seq = Some(new_seq);
+        }
 
         // Return next_offset snapshot from within the lock
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))
@@ -368,10 +405,10 @@ impl Storage for InMemoryStorage {
             let stream = stream_arc.read().expect("stream lock poisoned");
             let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
             *total = total.saturating_sub(stream.total_bytes);
+            Ok(())
+        } else {
+            Err(Error::NotFound(name.to_string()))
         }
-
-        // Idempotent - Ok even if stream didn't exist
-        Ok(())
     }
 
     fn head(&self, name: &str) -> Result<StreamMetadata> {
@@ -423,6 +460,7 @@ impl Storage for InMemoryStorage {
         content_type: &str,
         producer: &ProducerHeaders,
         should_close: bool,
+        seq: Option<&str>,
     ) -> Result<ProducerAppendResult> {
         let stream_arc = self
             .get_stream(name)
@@ -439,14 +477,16 @@ impl Storage for InMemoryStorage {
         // Lazy cleanup of stale producer state
         stream.cleanup_stale_producers();
 
-        // Check content type match
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
+        // Check content type match (only when there are messages to append)
+        if !messages.is_empty() {
+            let normalized_ct = content_type.to_lowercase();
+            let expected_ct = stream.config.content_type.to_lowercase();
+            if normalized_ct != expected_ct {
+                return Err(Error::ContentTypeMismatch {
+                    expected: stream.config.content_type.clone(),
+                    actual: content_type.to_string(),
+                });
+            }
         }
 
         // --- Producer validation (atomic with append) ---
@@ -509,7 +549,13 @@ impl Storage for InMemoryStorage {
             }
         }
 
+        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
+        let pending_seq = Self::validate_seq(&stream, seq)?;
+
         self.commit_messages(&mut stream, messages)?;
+        if let Some(new_seq) = pending_seq {
+            stream.last_seq = Some(new_seq);
+        }
 
         // Close stream if requested (atomic with append)
         if should_close {
@@ -575,11 +621,13 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
 
         // Create stream
-        storage.create_stream("test", config.clone()).unwrap();
+        let result = storage.create_stream("test", config.clone()).unwrap();
+        assert_eq!(result, CreateStreamResult::Created);
         assert!(storage.exists("test"));
 
         // Idempotent create with same config
-        storage.create_stream("test", config).unwrap();
+        let result = storage.create_stream("test", config).unwrap();
+        assert_eq!(result, CreateStreamResult::AlreadyExists);
 
         // Create with different config should fail
         let different_config = StreamConfig::new("application/json".to_string());
@@ -799,6 +847,52 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_append_does_not_advance_stream_seq_on_failed_commit() {
+        let storage = InMemoryStorage::new(1024, 8);
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.batch_append("test", oversized, "text/plain", Some("s1"));
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = vec![Bytes::from("ok")];
+        let result = storage.batch_append("test", retry, "text/plain", Some("s1"));
+        assert!(result.is_ok(), "retry with same seq should be accepted");
+    }
+
+    #[test]
+    fn test_producer_append_does_not_advance_stream_seq_on_failed_commit() {
+        let storage = InMemoryStorage::new(1024, 8);
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.append_with_producer(
+            "test",
+            oversized,
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = storage.append_with_producer(
+            "test",
+            vec![Bytes::from("ok")],
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(
+            matches!(retry, Ok(ProducerAppendResult::Accepted { .. })),
+            "retry with same producer seq and stream seq should succeed"
+        );
+    }
+
+    #[test]
     fn test_delete() {
         let storage = test_storage();
         let config = StreamConfig::new("text/plain".to_string());
@@ -818,8 +912,8 @@ mod tests {
         let bytes_after = storage.total_bytes();
         assert_eq!(bytes_after, 0);
 
-        // Idempotent delete
-        storage.delete("test").unwrap();
+        // Delete non-existent returns NotFound
+        assert!(matches!(storage.delete("test"), Err(Error::NotFound(_))));
     }
 
     #[test]
@@ -867,6 +961,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -894,6 +989,7 @@ mod tests {
                     "text/plain",
                     &producer("p1", 0, s),
                     false,
+                    None,
                 )
                 .unwrap();
             assert!(matches!(
@@ -921,6 +1017,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -932,6 +1029,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -962,6 +1060,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -973,6 +1072,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -999,6 +1099,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1010,6 +1111,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1037,6 +1139,7 @@ mod tests {
                     "text/plain",
                     &producer("p1", 0, seq),
                     false,
+                    None,
                 )
                 .unwrap();
         }
@@ -1049,6 +1152,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1075,6 +1179,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1085,6 +1190,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 1, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1104,6 +1210,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1136,6 +1243,7 @@ mod tests {
                 "text/plain",
                 &producer("a", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1147,6 +1255,7 @@ mod tests {
                 "text/plain",
                 &producer("b", 0, 0),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1158,6 +1267,7 @@ mod tests {
                 "text/plain",
                 &producer("a", 0, 1),
                 false,
+                None,
             )
             .unwrap();
 
@@ -1179,6 +1289,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 0),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1190,6 +1301,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 5),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1212,6 +1324,7 @@ mod tests {
                 "text/plain",
                 &producer("p1", 0, 3),
                 false,
+                None,
             )
             .unwrap_err();
 
@@ -1272,6 +1385,7 @@ mod tests {
                             "text/plain",
                             &producer(&prod_id, 0, seq),
                             false,
+                            None,
                         );
                         assert!(
                             result.is_ok(),

@@ -62,6 +62,13 @@ pub fn parse_ttl(value: &str) -> Result<u64> {
         )));
     }
 
+    // Reject leading plus sign (Rust's u64::parse accepts "+123")
+    if trimmed.starts_with('+') {
+        return Err(Error::InvalidTtl(format!(
+            "leading plus sign not allowed: '{trimmed}'"
+        )));
+    }
+
     // Parse as u64
     trimmed
         .parse::<u64>()
@@ -134,6 +141,10 @@ mod tests {
 
         // Negative
         assert!(parse_ttl("-1").is_err());
+
+        // Leading plus
+        assert!(parse_ttl("+1").is_err());
+        assert!(parse_ttl("+123").is_err());
 
         // Empty
         assert!(parse_ttl("").is_err());

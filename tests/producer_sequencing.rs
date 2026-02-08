@@ -706,7 +706,8 @@ async fn test_producer_close_without_body() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 200);
+    // Close-only with producer: 204 (no content appended, only state updated)
+    assert_eq!(response.status(), 204);
     assert_eq!(
         response
             .headers()

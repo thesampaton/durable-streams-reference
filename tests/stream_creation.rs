@@ -21,14 +21,21 @@ async fn test_create_stream_returns_201() {
 
     assert_eq!(response.status(), 201, "Expected 201 Created");
 
-    // Check Location header
+    // Check Location header (absolute URL)
     let location = response
         .headers()
         .get("location")
         .expect("Missing Location header")
         .to_str()
         .unwrap();
-    assert_eq!(location, format!("/v1/stream/{stream_name}"));
+    assert!(
+        location.ends_with(&format!("/v1/stream/{stream_name}")),
+        "Location should end with /v1/stream/{{name}}, got: {location}"
+    );
+    assert!(
+        location.starts_with("http"),
+        "Location should be absolute URL, got: {location}"
+    );
 
     // Check Content-Type header
     let content_type = response
@@ -136,9 +143,9 @@ async fn test_config_mismatch_returns_409() {
 
 /// Validates spec: 01-stream-lifecycle.md#create-stream
 ///
-/// Verifies that PUT with non-empty body returns 400 Bad Request.
+/// Verifies that PUT with body creates stream and appends initial data.
 #[tokio::test]
-async fn test_put_with_body_returns_400() {
+async fn test_put_with_body_creates_and_appends() {
     let (base_url, _port) = spawn_test_server().await;
     let client = test_client();
     let stream_name = unique_stream_name();
@@ -146,19 +153,30 @@ async fn test_put_with_body_returns_400() {
     let response = client
         .put(format!("{base_url}/v1/stream/{stream_name}"))
         .header("Content-Type", "text/plain")
-        .body("some body data")
+        .body("initial data")
         .send()
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 400, "Expected 400 Bad Request");
+    assert_eq!(response.status(), 201, "Expected 201 Created");
+
+    // Verify data was appended by reading the stream
+    let read_response = client
+        .get(format!("{base_url}/v1/stream/{stream_name}?offset=-1"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(read_response.status(), 200);
+    let body = read_response.text().await.unwrap();
+    assert_eq!(body, "initial data");
 }
 
 /// Validates spec: 01-stream-lifecycle.md#create-stream
 ///
-/// Verifies that PUT without Content-Type returns 400 Bad Request.
+/// Verifies that PUT without Content-Type defaults to application/octet-stream.
 #[tokio::test]
-async fn test_missing_content_type_returns_400() {
+async fn test_missing_content_type_defaults_to_octet_stream() {
     let (base_url, _port) = spawn_test_server().await;
     let client = test_client();
     let stream_name = unique_stream_name();
@@ -169,7 +187,19 @@ async fn test_missing_content_type_returns_400() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 400, "Expected 400 Bad Request");
+    assert_eq!(
+        response.status(),
+        201,
+        "Expected 201 Created with default Content-Type"
+    );
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("Missing Content-Type header")
+        .to_str()
+        .unwrap();
+    assert_eq!(content_type, "application/octet-stream");
 }
 
 /// Validates spec: 01-stream-lifecycle.md#create-stream
@@ -553,9 +583,9 @@ async fn test_delete_stream_returns_204() {
 
 /// Validates spec: 01-stream-lifecycle.md#delete-stream
 ///
-/// Verifies that DELETE is idempotent (returns 204 even if doesn't exist).
+/// Verifies that DELETE returns 404 for non-existent stream.
 #[tokio::test]
-async fn test_delete_nonexistent_returns_204() {
+async fn test_delete_nonexistent_returns_404() {
     let (base_url, _port) = spawn_test_server().await;
     let client = test_client();
     let stream_name = unique_stream_name();
@@ -567,7 +597,11 @@ async fn test_delete_nonexistent_returns_204() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 204, "Expected 204 for idempotent delete");
+    assert_eq!(
+        response.status(),
+        404,
+        "Expected 404 for non-existent stream"
+    );
 }
 
 /// Validates spec: 01-stream-lifecycle.md#delete-stream
