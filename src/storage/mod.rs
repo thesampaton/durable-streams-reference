@@ -139,6 +139,20 @@ pub enum CreateStreamResult {
     AlreadyExists,
 }
 
+/// Result of atomic create-with-data operation.
+///
+/// Bundles creation status with a metadata snapshot taken under the
+/// same lock hold so the handler never needs a separate `head()` call.
+#[derive(Debug)]
+pub struct CreateWithDataResult {
+    /// Whether the stream was newly created or already existed.
+    pub status: CreateStreamResult,
+    /// Next offset (for `Stream-Next-Offset` response header).
+    pub next_offset: Offset,
+    /// Whether the stream is closed (for `Stream-Closed` response header).
+    pub closed: bool,
+}
+
 /// Result of an append with producer sequencing.
 ///
 /// Includes a snapshot of stream state taken atomically with the operation
@@ -256,6 +270,23 @@ pub trait Storage: Send + Sync {
         should_close: bool,
         seq: Option<&str>,
     ) -> Result<ProducerAppendResult>;
+
+    /// Atomically create a stream with optional initial data and close.
+    ///
+    /// Creates the stream, appends `messages` (if non-empty), and closes
+    /// (if `should_close`) — all before the entry becomes visible to other
+    /// operations. If `commit_messages` fails (e.g. memory limit), the
+    /// stream is never created.
+    ///
+    /// For idempotent recreates (`AlreadyExists`), the body and close
+    /// flag are ignored and existing metadata is returned.
+    fn create_stream_with_data(
+        &self,
+        name: &str,
+        config: StreamConfig,
+        messages: Vec<Bytes>,
+        should_close: bool,
+    ) -> Result<CreateWithDataResult>;
 
     /// Check if a stream exists
     fn exists(&self, name: &str) -> bool;
