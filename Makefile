@@ -21,7 +21,7 @@ help:
 	@echo "  conformance           - Run external conformance test suite"
 	@echo "  benchmark             - Run benchmark-memory then benchmark-file (release)"
 	@echo "  benchmark-memory      - Run benchmark suite with in-memory storage"
-	@echo "  benchmark-file        - Run benchmark suite with file storage"
+	@echo "  benchmark-file        - Run benchmark suite with file storage (durable mode)"
 	@echo "  benchmark-node        - Run benchmark-node-memory then benchmark-node-file"
 	@echo "  benchmark-node-memory - Run benchmark suite against Node reference (memory)"
 	@echo "  benchmark-node-file   - Run benchmark suite against Node reference (file)"
@@ -129,7 +129,7 @@ benchmark-memory: release $(BENCHMARK_DIR)/node_modules
 	@set -e; \
 	echo ""; \
 	echo "=== Benchmark backend: memory ==="; \
-	STORAGE_BACKEND=memory STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release & SERVER_PID=$$!; \
+	STORAGE_MODE=memory cargo run --release & SERVER_PID=$$!; \
 	echo "Waiting for health check on :$(BENCHMARK_PORT)..."; \
 	HEALTHY=0; \
 	for i in $$(seq 1 30); do \
@@ -173,7 +173,7 @@ benchmark-file: release $(BENCHMARK_DIR)/node_modules
 	echo ""; \
 	echo "=== Benchmark backend: file ==="; \
 	rm -rf $(BENCHMARK_FILE_STORAGE_DIR); \
-	STORAGE_BACKEND=file STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release & SERVER_PID=$$!; \
+	STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release & SERVER_PID=$$!; \
 	echo "Waiting for health check on :$(BENCHMARK_PORT)..."; \
 	HEALTHY=0; \
 	for i in $$(seq 1 30); do \
