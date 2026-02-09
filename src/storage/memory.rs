@@ -8,6 +8,7 @@ use crate::protocol::producer::ProducerHeaders;
 use bytes::Bytes;
 use chrono::Utc;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
@@ -62,7 +63,7 @@ impl StreamEntry {
 /// Appends to different streams can proceed concurrently.
 pub struct InMemoryStorage {
     streams: RwLock<HashMap<String, Arc<RwLock<StreamEntry>>>>,
-    total_bytes: RwLock<u64>,
+    total_bytes: AtomicU64,
     max_total_bytes: u64,
     max_stream_bytes: u64,
 }
@@ -73,7 +74,7 @@ impl InMemoryStorage {
     pub fn new(max_total_bytes: u64, max_stream_bytes: u64) -> Self {
         Self {
             streams: RwLock::new(HashMap::new()),
-            total_bytes: RwLock::new(0),
+            total_bytes: AtomicU64::new(0),
             max_total_bytes,
             max_stream_bytes,
         }
@@ -86,7 +87,7 @@ impl InMemoryStorage {
     /// Panics if the `total_bytes` lock is poisoned (which indicates a panic while holding the lock).
     #[must_use]
     pub fn total_bytes(&self) -> u64 {
-        *self.total_bytes.read().expect("total_bytes lock poisoned")
+        self.total_bytes.load(Ordering::Acquire)
     }
 
     fn get_stream(&self, name: &str) -> Option<Arc<RwLock<StreamEntry>>> {
@@ -111,11 +112,21 @@ impl InMemoryStorage {
             total_batch_bytes += byte_len;
         }
 
-        let current_total = *self.total_bytes.read().expect("total_bytes lock poisoned");
-        if current_total + total_batch_bytes > self.max_total_bytes {
+        // Reserve global bytes atomically (global precedence before per-stream).
+        if self
+            .total_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(total_batch_bytes)
+                    .filter(|next| *next <= self.max_total_bytes)
+            })
+            .is_err()
+        {
             return Err(Error::MemoryLimitExceeded);
         }
         if stream.total_bytes + total_batch_bytes > self.max_stream_bytes {
+            self.total_bytes
+                .fetch_sub(total_batch_bytes, Ordering::AcqRel);
             return Err(Error::StreamSizeLimitExceeded);
         }
 
@@ -127,9 +138,6 @@ impl InMemoryStorage {
             let message = Message::new(offset, data);
             stream.messages.push(message);
         }
-
-        let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-        *total += total_batch_bytes;
 
         // Notify long-poll/SSE subscribers that new data is available.
         // Ignore errors (no active receivers is fine).
@@ -151,9 +159,11 @@ impl Storage for InMemoryStorage {
                 drop(stream);
                 streams.remove(name);
 
-                let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-                *total = total.saturating_sub(stream_bytes);
-                drop(total);
+                self.total_bytes
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        Some(current.saturating_sub(stream_bytes))
+                    })
+                    .ok();
             } else {
                 if stream.config == config {
                     return Ok(CreateStreamResult::AlreadyExists);
@@ -187,12 +197,20 @@ impl Storage for InMemoryStorage {
 
         let byte_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
 
-        let total_bytes = *self.total_bytes.read().expect("total_bytes lock poisoned");
-        if total_bytes + byte_len > self.max_total_bytes {
+        if self
+            .total_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(byte_len)
+                    .filter(|next| *next <= self.max_total_bytes)
+            })
+            .is_err()
+        {
             return Err(Error::MemoryLimitExceeded);
         }
 
         if stream.total_bytes + byte_len > self.max_stream_bytes {
+            self.total_bytes.fetch_sub(byte_len, Ordering::AcqRel);
             return Err(Error::StreamSizeLimitExceeded);
         }
 
@@ -204,9 +222,6 @@ impl Storage for InMemoryStorage {
 
         let message = Message::new(offset.clone(), data);
         stream.messages.push(message);
-
-        let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-        *total += byte_len;
 
         Ok(offset)
     }
@@ -302,8 +317,11 @@ impl Storage for InMemoryStorage {
 
         if let Some(stream_arc) = streams.remove(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
-            let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-            *total = total.saturating_sub(stream.total_bytes);
+            self.total_bytes
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    Some(current.saturating_sub(stream.total_bytes))
+                })
+                .ok();
             Ok(())
         } else {
             Err(Error::NotFound(name.to_string()))
@@ -435,9 +453,11 @@ impl Storage for InMemoryStorage {
                 let stream_bytes = stream.total_bytes;
                 drop(stream);
                 streams.remove(name);
-                let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-                *total = total.saturating_sub(stream_bytes);
-                drop(total);
+                self.total_bytes
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        Some(current.saturating_sub(stream_bytes))
+                    })
+                    .ok();
             } else if stream.config == config {
                 let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
                 let closed = stream.closed;

@@ -1,5 +1,5 @@
 use crate::protocol::error::{Error, Result};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use serde_json::Value;
 
 /// Process JSON data for append: validate and flatten arrays
@@ -60,20 +60,19 @@ pub fn wrap_read(messages: &[Bytes]) -> Result<Bytes> {
         return Ok(Bytes::from_static(b"[]"));
     }
 
-    // Parse each message as JSON and collect into array
-    let mut values = Vec::with_capacity(messages.len());
-    for msg in messages {
-        let value: Value = serde_json::from_slice(msg)
-            .map_err(|e| Error::InvalidJson(format!("stored message is not valid JSON: {e}")))?;
-        values.push(value);
+    // Stored JSON messages are validated on write; build the array directly
+    // to avoid per-message parse + re-serialize in read hot paths.
+    let total_payload_len: usize = messages.iter().map(Bytes::len).sum();
+    let mut out = BytesMut::with_capacity(total_payload_len + messages.len() + 1);
+    out.put_u8(b'[');
+    for (idx, msg) in messages.iter().enumerate() {
+        if idx > 0 {
+            out.put_u8(b',');
+        }
+        out.extend_from_slice(msg);
     }
-
-    // Wrap in array and serialize
-    let array = Value::Array(values);
-    let json_bytes =
-        serde_json::to_vec(&array).expect("serializing validated JSON array should not fail");
-
-    Ok(Bytes::from(json_bytes))
+    out.put_u8(b']');
+    Ok(out.freeze())
 }
 
 /// Check if a content type is JSON

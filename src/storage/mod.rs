@@ -218,7 +218,7 @@ pub(crate) fn is_stream_expired(config: &StreamConfig) -> bool {
 
 /// Validate content-type matches the stream's configured type (case-insensitive).
 pub(crate) fn validate_content_type(stream_ct: &str, request_ct: &str) -> Result<()> {
-    if request_ct.to_lowercase() != stream_ct.to_lowercase() {
+    if !request_ct.eq_ignore_ascii_case(stream_ct) {
         return Err(Error::ContentTypeMismatch {
             expected: stream_ct.to_string(),
             actual: request_ct.to_string(),
