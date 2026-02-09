@@ -95,7 +95,7 @@ any implementation of the protocol.
 
 This implementation strictly adheres to the durable streams protocol specification.
 Governance policies are defined in detail in `docs/protocol-governance.md` and
-`docs/blocker-policy.md` (canonical sources in `scratch/` until copied to `docs/`).
+`docs/blocker-policy.md`.
 
 ### Key Principles
 
