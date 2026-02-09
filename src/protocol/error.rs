@@ -85,6 +85,10 @@ pub enum Error {
     /// Stream-Seq ordering violation (409)
     #[error("Stream-Seq ordering violation: last={last}, received={received}")]
     SeqOrderingViolation { last: String, received: String },
+
+    /// Storage backend I/O or serialization error (500)
+    #[error("Storage error: {0}")]
+    Storage(String),
 }
 
 impl Error {
@@ -113,6 +117,7 @@ impl Error {
             | Self::InvalidJson(_)
             | Self::EmptyBody
             | Self::InvalidHeader { .. } => 400,
+            Self::Storage(_) => 500,
         }
     }
 }
