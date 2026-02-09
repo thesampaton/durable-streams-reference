@@ -145,6 +145,16 @@ impl FileStorage {
     /// as defense in depth.
     fn stream_dir_for_name(&self, name: &str) -> Result<PathBuf> {
         let encoded = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(name.as_bytes());
+
+        // Reject path traversal sequences and separators. Base64url encoding
+        // (alphabet [A-Za-z0-9_-]) cannot produce these, but the explicit
+        // checks act as defense in depth and satisfy static analysis (CodeQL
+        // rust/path-injection).
+        if encoded.contains("..") || encoded.contains('/') || encoded.contains('\\') {
+            return Err(Error::Storage(
+                "encoded stream name contains path traversal characters".to_string(),
+            ));
+        }
         if !encoded
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -153,6 +163,7 @@ impl FileStorage {
                 "encoded stream directory contains invalid characters".to_string(),
             ));
         }
+
         let dir = self.root_dir.join(&encoded);
         if !dir.starts_with(&self.root_dir) {
             return Err(Error::Storage(format!(
