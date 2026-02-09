@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@durable-streams/client": "0.2.1",
-    "jose": "^6.0.0"
+    "jose": "^6.0.0",
+    "pg": "^8.0.0"
   },
   "devDependencies": {
     "vitest": "^3.0.0"

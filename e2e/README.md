@@ -33,7 +33,12 @@ Durable Streams Server (:4437, internal only)
 | `generate-token.mjs` | CLI wrapper for minting test JWTs |
 | `test-utils.mjs` | Importable `generateToken()` for programmatic JWT creation |
 | `integration.test.mjs` | Vitest e2e test suite (8 scenarios) |
-| `package.json` | Node.js dependencies (`jose`, `@durable-streams/client`, `vitest`) |
+| `sessions.test.mjs` | Sessions + DB sync test suite (8 scenarios) |
+| `package.json` | Node.js dependencies (`jose`, `@durable-streams/client`, `pg`, `vitest`) |
+| `sync/` | Bidirectional sync service (PG <-> DS) |
+| `sync/init.sql` | Postgres schema (`items` + `session_events` tables) |
+| `sync/sync.mjs` | Sync bridge: Electric Shape API -> DS, DS SSE -> PG |
+| `sync/Dockerfile` | Container image for the sync service |
 
 ## Quick Start
 
@@ -112,6 +117,88 @@ E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose integration
 ```
 
 The `E2E_BASE_URL` env var defaults to `http://localhost:8080`.
+
+## Sessions + Database Sync
+
+The `sessions.test.mjs` suite validates the full production architecture:
+durable sessions (collaborative AI chat pattern) with bidirectional Postgres
+sync.
+
+### Architecture
+
+```
+Test Runner (host)
+  |
+  |--- PG -> Stream direction ---------------------------------|
+  |    INSERT INTO postgres -> Postgres -> Electric (Shape API) |
+  |                            (wal_level    -> Sync Service    |
+  |                             =logical)       -> DS Server    |
+  |    verify in DS stream <- Envoy (:8080) <-----|            |
+  |                                                             |
+  |--- Stream -> PG direction ---------------------------------|
+  |    POST session event -> Envoy -> DS Server                |
+  |                                    -> Sync Service          |
+  |                                       (SSE consumer)       |
+  |                                       -> Postgres           |
+  |    verify in postgres <------------------------------------|
+```
+
+### Services (docker-compose --profile sync)
+
+| Service | Image | Purpose |
+|---------|-------|---------|
+| `postgres` | `postgres:17-alpine` | Source/sink for structured data (port 54321) |
+| `electric` | `electricsql/electric:1.4.2` | PG WAL -> Shape API |
+| `sync-service` | `./e2e/sync` | Bidirectional bridge (Electric->DS + DS->PG) |
+
+### Event format
+
+Session events are opaque JSON to the DS server. The sync service forwards them
+as-is between DS streams and Postgres. A typical STATE-PROTOCOL event:
+
+```json
+{
+  "key": "user:alice",
+  "type": "presence",
+  "operation": "set",
+  "value": { "status": "online" }
+}
+```
+
+### Running the tests
+
+```bash
+# Fully automated (builds all containers, starts full stack, runs tests, tears down)
+make integration-test-sessions
+
+# Manual (stack already running)
+cd e2e && npm install
+E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose sessions.test.mjs
+```
+
+### Test scenarios
+
+**Sessions pattern (5 tests):**
+
+1. **Session lifecycle** — create session, write presence event, read back
+2. **Multi-producer chat** — user message + AI response chunks, verify ordering
+3. **SSE live subscription** — subscribe, write messages, verify real-time delivery
+4. **Session recovery** — write, save offset, write more, resume from offset
+5. **Producer idempotency** — write, retry same seq (204), write next seq (200)
+
+**Database sync (3 tests):**
+
+6. **PG -> Stream** — INSERT into `items`, poll DS stream `pg-items` until it appears
+7. **Stream -> PG** — POST to `session-events`, poll Postgres until row appears
+8. **Round trip** — INSERT into PG, poll DS stream until item appears
+
+### Sync service configuration
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `ELECTRIC_URL` | `http://electric:3000` | Electric SQL Shape API |
+| `DS_SERVER_URL` | `http://server:4437` | DS server (internal, no auth) |
+| `POSTGRES_URL` | `postgresql://postgres:password@postgres:5432/durable_streams` | Postgres connection |
 
 ## Envoy Configuration
 

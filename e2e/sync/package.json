@@ -1,0 +1,10 @@
+{
+  "name": "durable-streams-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@electric-sql/client": "^1.4.0",
+    "pg": "^8.0.0"
+  }
+}
