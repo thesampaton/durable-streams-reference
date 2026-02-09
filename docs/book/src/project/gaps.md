@@ -1,6 +1,6 @@
 # Spec gaps
 
-Ambiguities and edge cases not fully covered by the protocol spec or conformance tests are recorded in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/gaps.md). This page summarizes the current gaps and known ecosystem interop observations.
+Ambiguities and edge cases not fully covered by the protocol spec or conformance tests are recorded in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/gaps.md). This page summarizes the current gaps and known ecosystem interop observations.
 
 ## Active gaps
 
@@ -12,7 +12,7 @@ Gaps are not failures. They are explicit acknowledgments that the implementation
 
 ## Ecosystem interop observations
 
-These are recorded in [`docs/ecosystem-interop.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/ecosystem-interop.md). They are not protocol gaps -- the protocol is fine. They are rough edges in ecosystem components that developers encounter during integration.
+These are recorded in [`docs/ecosystem-interop.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/ecosystem-interop.md). They are not protocol gaps -- the protocol is fine. They are rough edges in ecosystem components that developers encounter during integration.
 
 | ID | Summary | Component |
 |----|---------|-----------|

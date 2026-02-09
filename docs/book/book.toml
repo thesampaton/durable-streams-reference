@@ -1,5 +1,5 @@
 [book]
-title = "Durable Streams Rust Server"
+title = "Durable Streams Reference"
 authors = ["Sam Paton"]
 language = "en"
 src = "src"
