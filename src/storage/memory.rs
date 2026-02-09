@@ -1,29 +1,15 @@
 use super::{
-    CreateStreamResult, Message, ProducerAppendResult, ReadResult, Storage, StreamConfig,
-    StreamMetadata,
+    CreateStreamResult, Message, NOTIFY_CHANNEL_CAPACITY, ProducerAppendResult, ProducerCheck,
+    ProducerState, ReadResult, Storage, StreamConfig, StreamMetadata,
 };
 use crate::protocol::error::{Error, Result};
 use crate::protocol::offset::Offset;
 use crate::protocol::producer::ProducerHeaders;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
-
-/// Per-producer state tracked within a stream
-struct ProducerState {
-    epoch: u64,
-    last_seq: u64,
-    updated_at: DateTime<Utc>,
-}
-
-/// Duration after which stale producer state is cleaned up (7 days)
-const PRODUCER_STATE_TTL_SECS: i64 = 7 * 24 * 60 * 60;
-
-/// Broadcast channel capacity for long-poll/SSE notifications.
-/// Small because notifications are hints (no payload), not data delivery.
-const NOTIFY_CHANNEL_CAPACITY: usize = 16;
 
 /// Internal stream entry
 struct StreamEntry {
@@ -33,7 +19,7 @@ struct StreamEntry {
     next_read_seq: u64,
     next_byte_offset: u64,
     total_bytes: u64,
-    created_at: DateTime<Utc>,
+    created_at: chrono::DateTime<Utc>,
     /// Per-producer state for idempotent producer support
     producers: HashMap<String, ProducerState>,
     /// Broadcast sender for notifying long-poll/SSE subscribers
@@ -59,15 +45,6 @@ impl StreamEntry {
             notify,
             last_seq: None,
         }
-    }
-
-    /// Clean up producer state entries older than the TTL threshold.
-    /// Called lazily on producer append operations.
-    fn cleanup_stale_producers(&mut self) {
-        let cutoff = Utc::now()
-            - chrono::TimeDelta::try_seconds(PRODUCER_STATE_TTL_SECS)
-                .expect("7 days fits in TimeDelta");
-        self.producers.retain(|_, state| state.updated_at > cutoff);
     }
 }
 
@@ -115,34 +92,6 @@ impl InMemoryStorage {
     fn get_stream(&self, name: &str) -> Option<Arc<RwLock<StreamEntry>>> {
         let streams = self.streams.read().expect("streams lock poisoned");
         streams.get(name).map(Arc::clone)
-    }
-
-    /// Check if a stream is expired based on its `expires_at` timestamp
-    fn is_expired(entry: &StreamEntry) -> bool {
-        if let Some(expires_at) = entry.config.expires_at {
-            Utc::now() >= expires_at
-        } else {
-            false
-        }
-    }
-
-    /// Validate Stream-Seq ordering and return a pending value to commit.
-    ///
-    /// Returns `Err(SeqOrderingViolation)` if the new seq is not strictly
-    /// greater than the last seq (lexicographic comparison).
-    fn validate_seq(stream: &StreamEntry, seq: Option<&str>) -> Result<Option<String>> {
-        if let Some(new_seq) = seq {
-            if let Some(ref last) = stream.last_seq
-                && new_seq <= last.as_str()
-            {
-                return Err(Error::SeqOrderingViolation {
-                    last: last.clone(),
-                    received: new_seq.to_string(),
-                });
-            }
-            return Ok(Some(new_seq.to_string()));
-        }
-        Ok(None)
     }
 
     /// Commit messages to a stream, checking memory limits first.
@@ -195,33 +144,24 @@ impl Storage for InMemoryStorage {
         let mut streams = self.streams.write().expect("streams lock poisoned");
 
         if let Some(stream_arc) = streams.get(name) {
-            // Stream exists, check if expired
             let stream = stream_arc.read().expect("stream lock poisoned");
 
-            if Self::is_expired(&stream) {
-                // Stream is expired, remove it and create new
-                // Capture bytes to reclaim from global counter
+            if super::is_stream_expired(&stream.config) {
                 let stream_bytes = stream.total_bytes;
-                drop(stream); // Release read lock before modifying map
+                drop(stream);
                 streams.remove(name);
 
-                // Reclaim memory from global counter
                 let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
                 *total = total.saturating_sub(stream_bytes);
-                drop(total); // Release lock before proceeding
-
-            // Fall through to create new stream
+                drop(total);
             } else {
-                // Stream is not expired, check for config match
                 if stream.config == config {
-                    // Idempotent create with matching config
                     return Ok(CreateStreamResult::AlreadyExists);
                 }
                 return Err(Error::ConfigMismatch);
             }
         }
 
-        // Create new stream
         let entry = StreamEntry::new(config);
         streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
 
@@ -233,33 +173,20 @@ impl Storage for InMemoryStorage {
             .get_stream(name)
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
 
-        // Acquire per-stream write lock to serialize appends and ensure monotonicity
-        // This lock is held across offset generation and message insertion
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        // Check if stream is expired
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
-        // Check if stream is closed
         if stream.closed {
             return Err(Error::StreamClosed);
         }
 
-        // Check content type match (normalized comparison)
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
-        }
+        super::validate_content_type(&stream.config.content_type, content_type)?;
 
         let byte_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
 
-        // Check memory limits
         let total_bytes = *self.total_bytes.read().expect("total_bytes lock poisoned");
         if total_bytes + byte_len > self.max_total_bytes {
             return Err(Error::MemoryLimitExceeded);
@@ -269,19 +196,15 @@ impl Storage for InMemoryStorage {
             return Err(Error::StreamSizeLimitExceeded);
         }
 
-        // Generate offset (monotonic)
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
 
-        // Update counters
         stream.next_read_seq += 1;
         stream.next_byte_offset += byte_len;
         stream.total_bytes += byte_len;
 
-        // Create and store message
         let message = Message::new(offset.clone(), data);
         stream.messages.push(message);
 
-        // Update global memory counter
         let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
         *total += byte_len;
 
@@ -306,38 +229,25 @@ impl Storage for InMemoryStorage {
             .get_stream(name)
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
 
-        // Acquire per-stream write lock for atomic batch operation
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        // Check if stream is expired
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
-        // Check if stream is closed
         if stream.closed {
             return Err(Error::StreamClosed);
         }
 
-        // Check content type match (normalized comparison)
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
-        }
+        super::validate_content_type(&stream.config.content_type, content_type)?;
 
-        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
-        let pending_seq = Self::validate_seq(&stream, seq)?;
+        let pending_seq = super::validate_seq(stream.last_seq.as_deref(), seq)?;
 
         self.commit_messages(&mut stream, messages)?;
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
         }
 
-        // Return next_offset snapshot from within the lock
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))
     }
 
@@ -348,14 +258,11 @@ impl Storage for InMemoryStorage {
 
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        // Check if stream is expired
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
-        // Handle sentinels
         if from_offset.is_now() {
-            // Reading from "now" returns empty at tail
             let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
             return Ok(ReadResult {
                 messages: Vec::new(),
@@ -365,13 +272,9 @@ impl Storage for InMemoryStorage {
             });
         }
 
-        // Find starting position
         let start_idx = if from_offset.is_start() {
             0
         } else {
-            // Find first message >= from_offset
-            // binary_search_by returns Ok(idx) if exact match, Err(idx) for insertion point
-            // Both give us the correct starting position
             match stream
                 .messages
                 .binary_search_by(|m| m.offset.cmp(from_offset))
@@ -380,13 +283,10 @@ impl Storage for InMemoryStorage {
             }
         };
 
-        // Read all messages from start_idx to end
         let messages: Vec<Message> = stream.messages[start_idx..].to_vec();
 
-        // Next offset is always what would be assigned to next append
         let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
 
-        // We're at tail if we've read to the end of available messages
         let at_tail = start_idx + messages.len() >= stream.messages.len();
 
         Ok(ReadResult {
@@ -401,7 +301,6 @@ impl Storage for InMemoryStorage {
         let mut streams = self.streams.write().expect("streams lock poisoned");
 
         if let Some(stream_arc) = streams.remove(name) {
-            // Update global memory counter
             let stream = stream_arc.read().expect("stream lock poisoned");
             let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
             *total = total.saturating_sub(stream.total_bytes);
@@ -418,8 +317,7 @@ impl Storage for InMemoryStorage {
 
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        // Check if stream is expired
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -440,14 +338,12 @@ impl Storage for InMemoryStorage {
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        // Check if stream is expired
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
         stream.closed = true;
 
-        // Notify long-poll subscribers so they wake up and see the closed state
         let _ = stream.notify.send(());
 
         Ok(())
@@ -466,103 +362,43 @@ impl Storage for InMemoryStorage {
             .get_stream(name)
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
 
-        // Acquire per-stream write lock for atomic validation + append
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        // Check expiration
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
-        // Lazy cleanup of stale producer state
-        stream.cleanup_stale_producers();
+        super::cleanup_stale_producers(&mut stream.producers);
 
-        // Check content type match (only when there are messages to append)
         if !messages.is_empty() {
-            let normalized_ct = content_type.to_lowercase();
-            let expected_ct = stream.config.content_type.to_lowercase();
-            if normalized_ct != expected_ct {
-                return Err(Error::ContentTypeMismatch {
-                    expected: stream.config.content_type.clone(),
-                    actual: content_type.to_string(),
-                });
-            }
+            super::validate_content_type(&stream.config.content_type, content_type)?;
         }
 
-        // --- Producer validation (atomic with append) ---
-        //
-        // Order matters:
-        //   1. Epoch fencing — always checked first (403)
-        //   2. Duplicate detection — before closed check so retries work (204)
-        //   3. Closed check — blocks new sequences on closed streams (409)
-        //   4. Gap / epoch-bump validation — only reached for non-duplicate, open streams
-        //   5. Accept + append
         let now = Utc::now();
 
-        if let Some(state) = stream.producers.get(&producer.id) {
-            if producer.epoch < state.epoch {
-                return Err(Error::EpochFenced {
-                    current: state.epoch,
-                    received: producer.epoch,
-                });
-            }
-
-            if producer.epoch == state.epoch && producer.seq <= state.last_seq {
-                // Duplicate — idempotent success regardless of closed state
+        match super::check_producer(stream.producers.get(&producer.id), producer, stream.closed)? {
+            ProducerCheck::Accept => {}
+            ProducerCheck::Duplicate { epoch, seq } => {
                 return Ok(ProducerAppendResult::Duplicate {
-                    epoch: state.epoch,
-                    seq: state.last_seq,
+                    epoch,
+                    seq,
                     next_offset: Offset::new(stream.next_read_seq, stream.next_byte_offset),
                     closed: stream.closed,
                 });
             }
-
-            // Not a duplicate — if stream is closed, reject
-            if stream.closed {
-                return Err(Error::StreamClosed);
-            }
-
-            if producer.epoch > state.epoch {
-                if producer.seq != 0 {
-                    return Err(Error::InvalidProducerState(
-                        "new epoch must start at seq 0".to_string(),
-                    ));
-                }
-                // Epoch bump with seq=0 → accept, will reset state below
-            } else if producer.seq > state.last_seq + 1 {
-                return Err(Error::SequenceGap {
-                    expected: state.last_seq + 1,
-                    actual: producer.seq,
-                });
-            }
-            // seq == state.last_seq + 1 → accept, fall through
-        } else {
-            // New producer — if stream is closed, reject
-            if stream.closed {
-                return Err(Error::StreamClosed);
-            }
-            if producer.seq != 0 {
-                return Err(Error::SequenceGap {
-                    expected: 0,
-                    actual: producer.seq,
-                });
-            }
         }
 
-        // Validate Stream-Seq ordering before append, but commit it only after append succeeds.
-        let pending_seq = Self::validate_seq(&stream, seq)?;
+        let pending_seq = super::validate_seq(stream.last_seq.as_deref(), seq)?;
 
         self.commit_messages(&mut stream, messages)?;
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
         }
 
-        // Close stream if requested (atomic with append)
         if should_close {
             stream.closed = true;
         }
 
-        // Update producer state
         stream.producers.insert(
             producer.id.clone(),
             ProducerState {
@@ -572,7 +408,6 @@ impl Storage for InMemoryStorage {
             },
         );
 
-        // Snapshot stream state while still holding the lock
         let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
         let closed = stream.closed;
 
@@ -596,8 +431,7 @@ impl Storage for InMemoryStorage {
         if let Some(stream_arc) = streams.get(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
 
-            if Self::is_expired(&stream) {
-                // Expired — reclaim memory, then fall through to create new
+            if super::is_stream_expired(&stream.config) {
                 let stream_bytes = stream.total_bytes;
                 drop(stream);
                 streams.remove(name);
@@ -605,7 +439,6 @@ impl Storage for InMemoryStorage {
                 *total = total.saturating_sub(stream_bytes);
                 drop(total);
             } else if stream.config == config {
-                // Idempotent create — return existing state, ignore body/close
                 let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
                 let closed = stream.closed;
                 return Ok(super::CreateWithDataResult {
@@ -618,20 +451,16 @@ impl Storage for InMemoryStorage {
             }
         }
 
-        // Build entry in memory (not yet in the map)
         let mut entry = StreamEntry::new(config);
 
-        // Append initial data — if this fails the entry is never inserted
         if !messages.is_empty() {
             self.commit_messages(&mut entry, messages)?;
         }
 
-        // Close atomically with creation
         if should_close {
             entry.closed = true;
         }
 
-        // Snapshot state before inserting
         let next_offset = Offset::new(entry.next_read_seq, entry.next_byte_offset);
         let closed = entry.closed;
 
@@ -648,8 +477,7 @@ impl Storage for InMemoryStorage {
         let streams = self.streams.read().expect("streams lock poisoned");
         if let Some(stream_arc) = streams.get(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
-            // Expired streams are treated as non-existent
-            !Self::is_expired(&stream)
+            !super::is_stream_expired(&stream.config)
         } else {
             false
         }
@@ -659,7 +487,7 @@ impl Storage for InMemoryStorage {
         let stream_arc = self.get_stream(name)?;
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return None;
         }
 
@@ -680,16 +508,13 @@ mod tests {
         let storage = test_storage();
         let config = StreamConfig::new("text/plain".to_string());
 
-        // Create stream
         let result = storage.create_stream("test", config.clone()).unwrap();
         assert_eq!(result, CreateStreamResult::Created);
         assert!(storage.exists("test"));
 
-        // Idempotent create with same config
         let result = storage.create_stream("test", config).unwrap();
         assert_eq!(result, CreateStreamResult::AlreadyExists);
 
-        // Create with different config should fail
         let different_config = StreamConfig::new("application/json".to_string());
         assert!(matches!(
             storage.create_stream("test", different_config),
@@ -703,17 +528,14 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Append some data
         let data1 = Bytes::from("hello");
         let offset1 = storage.append("test", data1.clone(), "text/plain").unwrap();
 
         let data2 = Bytes::from("world");
         let offset2 = storage.append("test", data2.clone(), "text/plain").unwrap();
 
-        // Offsets should be monotonically increasing
         assert!(offset1 < offset2);
 
-        // Read from start
         let result = storage.read("test", &Offset::start()).unwrap();
         assert_eq!(result.messages.len(), 2);
         assert_eq!(result.messages[0].data, data1);
@@ -734,7 +556,6 @@ mod tests {
             offsets.push(offset);
         }
 
-        // Verify all offsets are strictly increasing
         for i in 1..offsets.len() {
             assert!(offsets[i - 1] < offsets[i], "Offset monotonicity violated");
         }
@@ -749,7 +570,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Spawn multiple threads appending concurrently
         let mut handles = vec![];
         for thread_id in 0..5 {
             let storage_clone = Arc::clone(&storage);
@@ -765,14 +585,12 @@ mod tests {
             handles.push(handle);
         }
 
-        // Collect all offsets from all threads
         let mut all_offsets = Vec::new();
         for handle in handles {
             let offsets = handle.join().unwrap();
             all_offsets.extend(offsets);
         }
 
-        // Verify all offsets are unique and monotonic when sorted
         all_offsets.sort();
         for i in 1..all_offsets.len() {
             assert_ne!(
@@ -786,9 +604,8 @@ mod tests {
             );
         }
 
-        // Verify total message count
         let metadata = storage.head("test").unwrap();
-        assert_eq!(metadata.message_count, 100); // 5 threads * 20 messages
+        assert_eq!(metadata.message_count, 100);
     }
 
     #[test]
@@ -807,13 +624,11 @@ mod tests {
             .append("test", Bytes::from("msg3"), "text/plain")
             .unwrap();
 
-        // Read from offset2 should get msg2 and msg3
         let result = storage.read("test", &offset2).unwrap();
         assert_eq!(result.messages.len(), 2);
         assert_eq!(result.messages[0].data, Bytes::from("msg2"));
         assert_eq!(result.messages[1].data, Bytes::from("msg3"));
 
-        // Read from offset1 should get all three
         let result = storage.read("test", &offset1).unwrap();
         assert_eq!(result.messages.len(), 3);
     }
@@ -828,12 +643,10 @@ mod tests {
             .append("test", Bytes::from("msg1"), "text/plain")
             .unwrap();
 
-        // Read from "now" should return empty at tail
         let result = storage.read("test", &Offset::now()).unwrap();
         assert_eq!(result.messages.len(), 0);
         assert!(result.at_tail);
 
-        // Read from start should get all messages
         let result = storage.read("test", &Offset::start()).unwrap();
         assert_eq!(result.messages.len(), 1);
     }
@@ -844,16 +657,13 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Close stream
         storage.close_stream("test").unwrap();
 
-        // Append should fail
         assert!(matches!(
             storage.append("test", Bytes::from("data"), "text/plain"),
             Err(Error::StreamClosed)
         ));
 
-        // Reads should still work
         let result = storage.read("test", &Offset::start()).unwrap();
         assert!(result.closed);
     }
@@ -864,13 +674,11 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Append with wrong content type
         assert!(matches!(
             storage.append("test", Bytes::from("data"), "application/json"),
             Err(Error::ContentTypeMismatch { .. })
         ));
 
-        // Case-insensitive comparison
         storage
             .append("test", Bytes::from("data"), "TEXT/PLAIN")
             .unwrap();
@@ -878,28 +686,24 @@ mod tests {
 
     #[test]
     fn test_memory_limits() {
-        let storage = InMemoryStorage::new(100, 50); // Small limits
+        let storage = InMemoryStorage::new(100, 50);
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test1", config.clone()).unwrap();
         storage.create_stream("test2", config).unwrap();
 
-        // Fill up test1 to stream limit
         storage
             .append("test1", Bytes::from(vec![0u8; 50]), "text/plain")
             .unwrap();
 
-        // Should hit stream limit
         assert!(matches!(
             storage.append("test1", Bytes::from(vec![0u8; 10]), "text/plain"),
             Err(Error::StreamSizeLimitExceeded)
         ));
 
-        // test2 can still append
         storage
             .append("test2", Bytes::from(vec![0u8; 40]), "text/plain")
             .unwrap();
 
-        // Should hit global memory limit
         assert!(matches!(
             storage.append("test2", Bytes::from(vec![0u8; 20]), "text/plain"),
             Err(Error::MemoryLimitExceeded)
@@ -954,7 +758,6 @@ mod tests {
 
     #[test]
     fn test_create_with_data_rolls_back_on_memory_limit() {
-        // P1: if commit_messages fails, the stream must not exist
         let storage = InMemoryStorage::new(1024, 8);
         let config = StreamConfig::new("text/plain".to_string());
         let oversized = vec![Bytes::from(vec![0_u8; 9])];
@@ -969,7 +772,6 @@ mod tests {
 
     #[test]
     fn test_create_with_data_closed_is_atomic() {
-        // P2: created_closed must be set before the entry is visible
         let storage = test_storage();
         let config = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
 
@@ -979,11 +781,9 @@ mod tests {
         assert_eq!(result.status, CreateStreamResult::Created);
         assert!(result.closed, "stream must be closed in result snapshot");
 
-        // Verify via head() as well
         let meta = storage.head("test").unwrap();
         assert!(meta.closed, "stream must be closed via head()");
 
-        // Appends must be rejected
         assert!(matches!(
             storage.append("test", Bytes::from("data"), "text/plain"),
             Err(Error::StreamClosed)
@@ -1012,19 +812,16 @@ mod tests {
         let storage = test_storage();
         let config = StreamConfig::new("text/plain".to_string());
 
-        // First create with data
         let r1 = storage
             .create_stream_with_data("test", config.clone(), vec![Bytes::from("a")], false)
             .unwrap();
         assert_eq!(r1.status, CreateStreamResult::Created);
 
-        // Idempotent recreate — body must be ignored
         let r2 = storage
             .create_stream_with_data("test", config, vec![Bytes::from("b")], false)
             .unwrap();
         assert_eq!(r2.status, CreateStreamResult::AlreadyExists);
 
-        // Only 1 message from first create
         let meta = storage.head("test").unwrap();
         assert_eq!(meta.message_count, 1);
     }
@@ -1042,14 +839,12 @@ mod tests {
         let bytes_before = storage.total_bytes();
         assert!(bytes_before >= 100);
 
-        // Delete stream
         storage.delete("test").unwrap();
         assert!(!storage.exists("test"));
 
         let bytes_after = storage.total_bytes();
         assert_eq!(bytes_after, 0);
 
-        // Delete non-existent returns NotFound
         assert!(matches!(storage.delete("test"), Err(Error::NotFound(_))));
     }
 
@@ -1135,7 +930,6 @@ mod tests {
             ));
         }
 
-        // Verify all 3 messages stored
         let metadata = storage.head("test").unwrap();
         assert_eq!(metadata.message_count, 3);
     }
@@ -1146,7 +940,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // First append
         storage
             .append_with_producer(
                 "test",
@@ -1158,7 +951,6 @@ mod tests {
             )
             .unwrap();
 
-        // Duplicate
         let result = storage
             .append_with_producer(
                 "test",
@@ -1179,7 +971,6 @@ mod tests {
             }
         ));
 
-        // Only 1 message stored (not 2)
         let metadata = storage.head("test").unwrap();
         assert_eq!(metadata.message_count, 1);
     }
@@ -1201,7 +992,6 @@ mod tests {
             )
             .unwrap();
 
-        // Skip seq 1, send seq 2
         let err = storage
             .append_with_producer(
                 "test",
@@ -1228,7 +1018,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Establish epoch 1
         storage
             .append_with_producer(
                 "test",
@@ -1240,7 +1029,6 @@ mod tests {
             )
             .unwrap();
 
-        // Try with old epoch 0
         let err = storage
             .append_with_producer(
                 "test",
@@ -1267,7 +1055,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Epoch 0, seq 0..2
         for seq in 0..3 {
             storage
                 .append_with_producer(
@@ -1281,7 +1068,6 @@ mod tests {
                 .unwrap();
         }
 
-        // Bump to epoch 1 with seq 0
         let result = storage
             .append_with_producer(
                 "test",
@@ -1372,7 +1158,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Producer A seq 0
         storage
             .append_with_producer(
                 "test",
@@ -1384,7 +1169,6 @@ mod tests {
             )
             .unwrap();
 
-        // Producer B seq 0 (independent)
         storage
             .append_with_producer(
                 "test",
@@ -1396,7 +1180,6 @@ mod tests {
             )
             .unwrap();
 
-        // Producer A seq 1
         storage
             .append_with_producer(
                 "test",
@@ -1418,7 +1201,6 @@ mod tests {
         let config = StreamConfig::new("text/plain".to_string());
         storage.create_stream("test", config).unwrap();
 
-        // Append + close atomically
         storage
             .append_with_producer(
                 "test",
@@ -1430,7 +1212,6 @@ mod tests {
             )
             .unwrap();
 
-        // Send gap seq to closed stream — must get StreamClosed, not SequenceGap
         let err = storage
             .append_with_producer(
                 "test",
