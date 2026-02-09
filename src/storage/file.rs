@@ -87,6 +87,7 @@ pub struct FileStorage {
     max_total_bytes: u64,
     max_stream_bytes: u64,
     root_dir: PathBuf,
+    root_dir_canonical: PathBuf,
     sync_on_append: bool,
 }
 
@@ -109,12 +110,20 @@ impl FileStorage {
             ))
         })?;
 
+        let root_dir_canonical = fs::canonicalize(&root_dir).map_err(|e| {
+            Error::Storage(format!(
+                "failed to canonicalize storage directory {}: {e}",
+                root_dir.display()
+            ))
+        })?;
+
         let storage = Self {
             streams: RwLock::new(HashMap::new()),
             total_bytes: RwLock::new(0),
             max_total_bytes,
             max_stream_bytes,
             root_dir,
+            root_dir_canonical,
             sync_on_append,
         };
         storage.load_existing_streams()?;
@@ -136,6 +145,14 @@ impl FileStorage {
     /// as defense in depth.
     fn stream_dir_for_name(&self, name: &str) -> Result<PathBuf> {
         let encoded = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(name.as_bytes());
+        if !encoded
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(Error::Storage(
+                "encoded stream directory contains invalid characters".to_string(),
+            ));
+        }
         let dir = self.root_dir.join(&encoded);
         if !dir.starts_with(&self.root_dir) {
             return Err(Error::Storage(format!(
@@ -143,6 +160,64 @@ impl FileStorage {
             )));
         }
         Ok(dir)
+    }
+
+    fn validate_stream_dir(&self, dir: &Path) -> Result<()> {
+        if !dir.starts_with(&self.root_dir) {
+            return Err(Error::Storage(format!(
+                "path escapes storage root: {}",
+                dir.display()
+            )));
+        }
+
+        let rel = dir.strip_prefix(&self.root_dir).map_err(|e| {
+            Error::Storage(format!(
+                "failed to validate storage path {}: {e}",
+                dir.display()
+            ))
+        })?;
+        if rel.components().count() != 1 {
+            return Err(Error::Storage(format!(
+                "invalid stream path depth: {}",
+                dir.display()
+            )));
+        }
+
+        if dir.exists() {
+            let metadata = fs::symlink_metadata(dir).map_err(|e| {
+                Error::Storage(format!(
+                    "failed to stat stream directory {}: {e}",
+                    dir.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::Storage(format!(
+                    "stream directory cannot be a symlink: {}",
+                    dir.display()
+                )));
+            }
+            if !metadata.is_dir() {
+                return Err(Error::Storage(format!(
+                    "stream path is not a directory: {}",
+                    dir.display()
+                )));
+            }
+
+            let canonical = fs::canonicalize(dir).map_err(|e| {
+                Error::Storage(format!(
+                    "failed to canonicalize stream directory {}: {e}",
+                    dir.display()
+                ))
+            })?;
+            if !canonical.starts_with(&self.root_dir_canonical) {
+                return Err(Error::Storage(format!(
+                    "stream directory resolves outside storage root: {}",
+                    dir.display()
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     fn data_log_path(dir: &Path) -> PathBuf {
@@ -153,7 +228,8 @@ impl FileStorage {
         dir.join("meta.json")
     }
 
-    fn write_metadata_for(name: &str, entry: &StreamEntry) -> Result<()> {
+    fn write_metadata_for(&self, name: &str, entry: &StreamEntry) -> Result<()> {
+        self.validate_stream_dir(&entry.dir)?;
         let meta = StreamMeta {
             name: name.to_string(),
             config: entry.config.clone(),
@@ -185,7 +261,8 @@ impl FileStorage {
         Ok(())
     }
 
-    fn open_stream_file(dir: &Path) -> Result<File> {
+    fn open_stream_file(&self, dir: &Path) -> Result<File> {
+        self.validate_stream_dir(dir)?;
         let path = Self::data_log_path(dir);
         OpenOptions::new()
             .create(true)
@@ -382,7 +459,8 @@ impl FileStorage {
         Ok(messages)
     }
 
-    fn remove_stream_dir(dir: &Path) -> Result<()> {
+    fn remove_stream_dir(&self, dir: &Path) -> Result<()> {
+        self.validate_stream_dir(dir)?;
         fs::remove_dir_all(dir).map_err(|e| {
             Error::Storage(format!(
                 "failed to remove stream directory {}: {e}",
@@ -409,8 +487,7 @@ impl FileStorage {
             if !path.is_dir() {
                 continue;
             }
-            // Skip entries that escape root_dir (e.g. symlinks pointing outside)
-            if !path.starts_with(&self.root_dir) {
+            if self.validate_stream_dir(&path).is_err() {
                 continue;
             }
 
@@ -432,7 +509,7 @@ impl FileStorage {
                 ))
             })?;
 
-            let mut file = Self::open_stream_file(&path)?;
+            let mut file = self.open_stream_file(&path)?;
             let (index, next_read_seq, next_byte_offset) = Self::rebuild_index(&mut file)?;
             let total_bytes = next_byte_offset;
 
@@ -453,7 +530,7 @@ impl FileStorage {
             };
 
             if super::is_stream_expired(&entry.config) {
-                Self::remove_stream_dir(&entry.dir)?;
+                self.remove_stream_dir(&entry.dir)?;
                 continue;
             }
 
@@ -485,7 +562,7 @@ impl Storage for FileStorage {
                 *total = total.saturating_sub(stream_bytes);
                 drop(total);
 
-                Self::remove_stream_dir(&dir)?;
+                self.remove_stream_dir(&dir)?;
             } else if stream.config == config {
                 return Ok(CreateStreamResult::AlreadyExists);
             } else {
@@ -501,10 +578,11 @@ impl Storage for FileStorage {
             ))
         })?;
 
-        let file = Self::open_stream_file(&dir)?;
+        self.validate_stream_dir(&dir)?;
+        let file = self.open_stream_file(&dir)?;
         let entry = StreamEntry::new(config, file, dir);
 
-        Self::write_metadata_for(name, &entry)?;
+        self.write_metadata_for(name, &entry)?;
         streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
 
         Ok(CreateStreamResult::Created)
@@ -530,7 +608,7 @@ impl Storage for FileStorage {
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
         self.append_records(name, &mut stream, &[data])?;
         // Data is committed to the log; metadata write failure is non-fatal
-        if let Err(e) = Self::write_metadata_for(name, &stream) {
+        if let Err(e) = self.write_metadata_for(name, &stream) {
             warn!(%e, stream = name, "metadata persist failed after committed append");
         }
         Ok(offset)
@@ -572,7 +650,7 @@ impl Storage for FileStorage {
             stream.last_seq = Some(new_seq);
         }
         // Data is committed to the log; metadata write failure is non-fatal
-        if let Err(e) = Self::write_metadata_for(name, &stream) {
+        if let Err(e) = self.write_metadata_for(name, &stream) {
             warn!(%e, stream = name, "metadata persist failed after committed batch append");
         }
 
@@ -632,7 +710,7 @@ impl Storage for FileStorage {
             *total = total.saturating_sub(stream_bytes);
             drop(total);
 
-            Self::remove_stream_dir(&dir)?;
+            self.remove_stream_dir(&dir)?;
             Ok(())
         } else {
             Err(Error::NotFound(name.to_string()))
@@ -672,7 +750,7 @@ impl Storage for FileStorage {
         }
 
         stream.closed = true;
-        Self::write_metadata_for(name, &stream)?;
+        self.write_metadata_for(name, &stream)?;
 
         let _ = stream.notify.send(());
         Ok(())
@@ -741,7 +819,7 @@ impl Storage for FileStorage {
         );
 
         // Data is committed to the log; metadata write failure is non-fatal
-        if let Err(e) = Self::write_metadata_for(name, &stream) {
+        if let Err(e) = self.write_metadata_for(name, &stream) {
             warn!(%e, stream = name, "metadata persist failed after committed producer append");
         }
 
@@ -775,7 +853,7 @@ impl Storage for FileStorage {
                 *total = total.saturating_sub(stream_bytes);
                 drop(total);
 
-                Self::remove_stream_dir(&dir)?;
+                self.remove_stream_dir(&dir)?;
             } else if stream.config == config {
                 return Ok(CreateWithDataResult {
                     status: CreateStreamResult::AlreadyExists,
@@ -795,7 +873,8 @@ impl Storage for FileStorage {
             ))
         })?;
 
-        let file = Self::open_stream_file(&dir)?;
+        self.validate_stream_dir(&dir)?;
+        let file = self.open_stream_file(&dir)?;
         let mut entry = StreamEntry::new(config, file, dir);
 
         if !messages.is_empty() {
@@ -808,7 +887,7 @@ impl Storage for FileStorage {
         let next_offset = Offset::new(entry.next_read_seq, entry.next_byte_offset);
         let closed = entry.closed;
 
-        Self::write_metadata_for(name, &entry)?;
+        self.write_metadata_for(name, &entry)?;
         streams.insert(name.to_string(), Arc::new(RwLock::new(entry)));
 
         Ok(CreateWithDataResult {
