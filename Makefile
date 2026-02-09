@@ -48,11 +48,13 @@ help:
 	@echo "  clean                 - Clean build artifacts"
 
 # Build targets
+CARGO_FEATURES ?=
+
 build:
-	cargo build
+	cargo build $(CARGO_FEATURES)
 
 release:
-	cargo build --release
+	cargo build --release $(CARGO_FEATURES)
 
 # Code quality targets
 lint:
@@ -89,7 +91,7 @@ $(CONFORMANCE_DIR)/package.json:
 
 conformance: build $(CONFORMANCE_DIR)/node_modules
 	@echo "Starting server on port 4437..."
-	@LONG_POLL_TIMEOUT_SECS=2 cargo run & SERVER_PID=$$!; \
+	@LONG_POLL_TIMEOUT_SECS=2 cargo run $(CARGO_FEATURES) & SERVER_PID=$$!; \
 	echo "Waiting for health check..."; \
 	for i in $$(seq 1 30); do curl -s http://localhost:4437/healthz > /dev/null 2>&1 && break; sleep 1; done; \
 	echo "Running conformance tests..."; \
@@ -142,13 +144,13 @@ benchmark: benchmark-memory benchmark-file
 benchmark-memory: release $(BENCHMARK_DIR)/node_modules
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "memory" localhost $(BENCHMARK_PORT) /healthz memory \
-		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=memory cargo run --release
+		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=memory cargo run --release $(CARGO_FEATURES)
 
 benchmark-file: release $(BENCHMARK_DIR)/node_modules
 	@rm -rf $(BENCHMARK_FILE_STORAGE_DIR)
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "file (durable)" localhost $(BENCHMARK_PORT) /healthz file \
-		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release
+		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
 
 benchmark-node: benchmark-node-memory benchmark-node-file
 	@echo ""
