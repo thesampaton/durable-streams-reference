@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs clean help dev dev-down dev-ui
+.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
 
 # Default target
 help:
@@ -33,7 +33,8 @@ help:
 	@echo "  dev-ui                - Clone test-ui (once) and run on :3000"
 	@echo ""
 	@echo "Other:"
-	@echo "  docs                  - Build documentation"
+	@echo "  docs                  - Build mdbook documentation"
+	@echo "  docs-serve            - Serve docs locally with live reload"
 	@echo "  clean                 - Clean build artifacts"
 
 # Build targets
@@ -207,11 +208,12 @@ docker-up:
 docker-down:
 	docker-compose down
 
-# Documentation target
+# Documentation targets
 docs:
-	@echo "Documentation build not yet implemented"
-	@echo "Will run: mdbook build"
-	@exit 1
+	mdbook build docs/book
+
+docs-serve:
+	mdbook serve docs/book --open
 
 # Clean target
 clean:
