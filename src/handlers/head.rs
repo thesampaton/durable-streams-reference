@@ -2,7 +2,7 @@ use crate::protocol::{error::Result, headers::names};
 use crate::storage::Storage;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -35,7 +35,7 @@ pub async fn stream_metadata<S: Storage>(
     );
     headers.insert(
         names::STREAM_NEXT_OFFSET,
-        metadata.next_offset.to_string().parse().unwrap(),
+        HeaderValue::from_bytes(metadata.next_offset.as_str().as_bytes()).unwrap(),
     );
     // Include Stream-Closed if stream is closed
     if metadata.closed {

@@ -5,7 +5,7 @@ use crate::storage::{CreateStreamResult, CreateWithDataResult, Storage, StreamCo
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -138,7 +138,7 @@ pub async fn create_stream<S: Storage>(
     response_headers.insert("content-type", normalized_ct.parse().unwrap());
     response_headers.insert(
         names::STREAM_NEXT_OFFSET,
-        next_offset.to_string().parse().unwrap(),
+        HeaderValue::from_bytes(next_offset.as_str().as_bytes()).unwrap(),
     );
     response_headers.insert("location", location.parse().unwrap());
 

@@ -1,17 +1,23 @@
 use crate::protocol::error::{Error, Result};
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-/// Offset newtype with validated format
+/// Offset value with validated format.
 ///
-/// Format: `{read_seq:016x}_{byte_offset:016x}` (zero-padded lowercase hex)
-/// Sentinels: "-1" (stream start), "now" (tail/live)
-///
-/// Offsets are lexicographically ordered and must be monotonically increasing
-/// within a stream. The format guarantees lexicographic ordering equals
-/// temporal ordering.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Offset(String);
+/// Canonical format: `{read_seq:016x}_{byte_offset:016x}`.
+/// Sentinels: `-1` (stream start), `now` (tail/live).
+#[derive(Debug, Clone)]
+pub enum Offset {
+    Start,
+    Now,
+    Concrete {
+        read_seq: u64,
+        byte_offset: u64,
+        raw: [u8; 33],
+    },
+}
 
 impl Offset {
     /// Sentinel value for stream start
@@ -20,82 +26,72 @@ impl Offset {
     /// Sentinel value for stream tail/live mode
     pub const NOW: &'static str = "now";
 
-    /// Create a new offset from read sequence and byte offset
-    ///
-    /// Generates the canonical offset format: `{read_seq:016x}_{byte_offset:016x}`
+    /// Create a new offset from read sequence and byte offset.
     #[must_use]
     pub fn new(read_seq: u64, byte_offset: u64) -> Self {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut raw = [0u8; 33];
-
-        for (i, slot) in raw[..16].iter_mut().enumerate() {
-            let shift = (15 - i) * 4;
-            *slot = HEX[((read_seq >> shift) & 0xF) as usize];
+        Self::Concrete {
+            read_seq,
+            byte_offset,
+            raw: encode_offset(read_seq, byte_offset),
         }
-        raw[16] = b'_';
-        for (i, slot) in raw[17..].iter_mut().enumerate() {
-            let shift = (15 - i) * 4;
-            *slot = HEX[((byte_offset >> shift) & 0xF) as usize];
-        }
-
-        let mut s = String::with_capacity(33);
-        for &b in &raw {
-            s.push(char::from(b));
-        }
-        Self(s)
     }
 
     /// Create the stream start sentinel
     #[must_use]
     pub fn start() -> Self {
-        Self(Self::START.to_string())
+        Self::Start
     }
 
     /// Create the tail/now sentinel
     #[must_use]
     pub fn now() -> Self {
-        Self(Self::NOW.to_string())
+        Self::Now
     }
 
     /// Check if this is the start sentinel
     #[must_use]
     pub fn is_start(&self) -> bool {
-        self.0 == Self::START
+        matches!(self, Self::Start)
     }
 
     /// Check if this is the now/tail sentinel
     #[must_use]
     pub fn is_now(&self) -> bool {
-        self.0 == Self::NOW
+        matches!(self, Self::Now)
     }
 
     /// Check if this is a sentinel value (start or now)
     #[must_use]
     pub fn is_sentinel(&self) -> bool {
-        self.is_start() || self.is_now()
+        matches!(self, Self::Start | Self::Now)
     }
 
-    /// Get the raw offset string
+    /// Get the canonical offset string.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        match self {
+            Self::Start => Self::START,
+            Self::Now => Self::NOW,
+            Self::Concrete { raw, .. } => {
+                // SAFETY: `raw` is always constructed from ASCII hex digits + `_`.
+                unsafe { std::str::from_utf8_unchecked(raw) }
+            }
+        }
     }
 
-    /// Parse the offset into (`read_seq`, `byte_offset`) components
+    /// Parse the offset into (`read_seq`, `byte_offset`) components.
     ///
     /// Returns `None` for sentinel values.
     #[must_use]
     pub fn parse_components(&self) -> Option<(u64, u64)> {
-        if self.is_sentinel() {
-            return None;
+        match self {
+            Self::Concrete {
+                read_seq,
+                byte_offset,
+                ..
+            } => Some((*read_seq, *byte_offset)),
+            Self::Start | Self::Now => None,
         }
-
-        let (read_seq_raw, byte_offset_raw) = self.0.split_once('_')?;
-
-        let read_seq = u64::from_str_radix(read_seq_raw, 16).ok()?;
-        let byte_offset = u64::from_str_radix(byte_offset_raw, 16).ok()?;
-
-        Some((read_seq, byte_offset))
     }
 }
 
@@ -103,67 +99,133 @@ impl FromStr for Offset {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        // Allow sentinels
-        if s == Self::START || s == Self::NOW {
-            return Ok(Self(s.to_string()));
+        if s == Self::START {
+            return Ok(Self::Start);
+        }
+        if s == Self::NOW {
+            return Ok(Self::Now);
         }
 
-        // Validate format: {hex}_{hex}
-        let Some((read_seq_raw, byte_offset_raw)) = s.split_once('_') else {
+        let bytes = s.as_bytes();
+        if bytes.len() != 33 || bytes[16] != b'_' {
             return Err(Error::InvalidOffset(format!(
                 "Expected format 'read_seq_byte_offset', got '{s}'"
             )));
-        };
+        }
 
-        // Validate both parts are exactly 16 hex digits
-        for (i, part) in [read_seq_raw, byte_offset_raw].into_iter().enumerate() {
-            if part.len() != 16 {
-                return Err(Error::InvalidOffset(format!(
-                    "Expected 16 hex digits for part {}, got {} digits in '{s}'",
-                    i + 1,
-                    part.len()
-                )));
+        for (idx, b) in bytes.iter().copied().enumerate() {
+            if idx == 16 {
+                continue;
             }
-
-            // Validate hex digits (lowercase only for canonical form)
-            if !part.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(Error::InvalidOffset(format!(
-                    "Invalid hex character in part {} of '{s}'",
-                    i + 1
-                )));
-            }
-
-            // Ensure lowercase (canonical form)
-            if part.chars().any(|c| c.is_ascii_uppercase()) {
+            if b.is_ascii_uppercase() {
                 return Err(Error::InvalidOffset(format!(
                     "Offset must use lowercase hex digits: '{s}'"
                 )));
             }
+            if !b.is_ascii_digit() && !(b'a'..=b'f').contains(&b) {
+                let part_num = if idx < 16 { 1 } else { 2 };
+                return Err(Error::InvalidOffset(format!(
+                    "Invalid hex character in part {part_num} of '{s}'"
+                )));
+            }
         }
 
-        // Validate parseable
-        if u64::from_str_radix(read_seq_raw, 16).is_err()
-            || u64::from_str_radix(byte_offset_raw, 16).is_err()
-        {
-            return Err(Error::InvalidOffset(format!(
-                "Failed to parse hex values in '{s}'"
-            )));
-        }
+        let read_seq = decode_hex_16(&bytes[..16])
+            .ok_or_else(|| Error::InvalidOffset(format!("Failed to parse hex values in '{s}'")))?;
+        let byte_offset = decode_hex_16(&bytes[17..])
+            .ok_or_else(|| Error::InvalidOffset(format!("Failed to parse hex values in '{s}'")))?;
 
-        Ok(Self(s.to_string()))
+        Ok(Self::Concrete {
+            read_seq,
+            byte_offset,
+            raw: encode_offset(read_seq, byte_offset),
+        })
     }
 }
 
 impl fmt::Display for Offset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(self.as_str())
     }
 }
 
 impl From<Offset> for String {
     fn from(offset: Offset) -> Self {
-        offset.0
+        offset.as_str().to_string()
     }
+}
+
+impl PartialEq for Offset {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.parse_components(), other.parse_components()) {
+            (Some(a), Some(b)) => a == b,
+            _ => self.as_str() == other.as_str(),
+        }
+    }
+}
+
+impl Eq for Offset {}
+
+impl PartialOrd for Offset {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Offset {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.parse_components(), other.parse_components()) {
+            (Some((a_rs, a_bo)), Some((b_rs, b_bo))) => (a_rs, a_bo).cmp(&(b_rs, b_bo)),
+            _ => self.as_str().cmp(other.as_str()),
+        }
+    }
+}
+
+impl Hash for Offset {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if let Some((read_seq, byte_offset)) = self.parse_components() {
+            0u8.hash(state);
+            read_seq.hash(state);
+            byte_offset.hash(state);
+        } else {
+            1u8.hash(state);
+            self.as_str().hash(state);
+        }
+    }
+}
+
+fn encode_offset(read_seq: u64, byte_offset: u64) -> [u8; 33] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut raw = [0u8; 33];
+
+    for (i, slot) in raw[..16].iter_mut().enumerate() {
+        let shift = (15 - i) * 4;
+        *slot = HEX[((read_seq >> shift) & 0xF) as usize];
+    }
+    raw[16] = b'_';
+    for (i, slot) in raw[17..].iter_mut().enumerate() {
+        let shift = (15 - i) * 4;
+        *slot = HEX[((byte_offset >> shift) & 0xF) as usize];
+    }
+
+    raw
+}
+
+fn decode_hex_16(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() != 16 {
+        return None;
+    }
+
+    let mut value = 0u64;
+    for b in bytes {
+        let digit = match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            _ => return None,
+        };
+        value = (value << 4) | u64::from(digit);
+    }
+    Some(value)
 }
 
 #[cfg(test)]

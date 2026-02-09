@@ -6,7 +6,7 @@ use crate::storage::{ProducerAppendResult, Storage};
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
@@ -156,7 +156,7 @@ fn handle_non_producer_append<S: Storage>(
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         names::STREAM_NEXT_OFFSET,
-        next_offset.to_string().parse().unwrap(),
+        HeaderValue::from_bytes(next_offset.as_str().as_bytes()).unwrap(),
     );
 
     if should_close {
@@ -209,7 +209,7 @@ fn handle_producer_append<S: Storage>(
             let mut response_headers = HeaderMap::new();
             response_headers.insert(
                 names::STREAM_NEXT_OFFSET,
-                next_offset.to_string().parse().unwrap(),
+                HeaderValue::from_bytes(next_offset.as_str().as_bytes()).unwrap(),
             );
             response_headers.insert(names::PRODUCER_EPOCH, epoch.to_string().parse().unwrap());
             response_headers.insert(names::PRODUCER_SEQ, seq.to_string().parse().unwrap());
@@ -226,7 +226,7 @@ fn handle_producer_append<S: Storage>(
             error_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
             error_headers.insert(
                 names::STREAM_NEXT_OFFSET,
-                metadata.next_offset.to_string().parse().unwrap(),
+                HeaderValue::from_bytes(metadata.next_offset.as_str().as_bytes()).unwrap(),
             );
             Ok((StatusCode::CONFLICT, error_headers, "Stream is closed").into_response())
         }
@@ -263,7 +263,7 @@ fn stream_closed_response<S: Storage>(storage: &Arc<S>, name: &str) -> Result<Re
     error_headers.insert(names::STREAM_CLOSED, "true".parse().unwrap());
     error_headers.insert(
         names::STREAM_NEXT_OFFSET,
-        metadata.next_offset.to_string().parse().unwrap(),
+        HeaderValue::from_bytes(metadata.next_offset.as_str().as_bytes()).unwrap(),
     );
     Ok((StatusCode::CONFLICT, error_headers, "Stream is closed").into_response())
 }

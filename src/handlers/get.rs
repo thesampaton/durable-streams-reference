@@ -255,7 +255,7 @@ fn build_sse_byte_stream<S: Storage + 'static>(
 
         // Emit initial data + control
         for msg in &read_result.messages {
-            yield Ok(sse::format_data_frame(&msg.data, is_binary, is_json));
+            yield Ok(sse::format_data_frame(msg, is_binary, is_json));
         }
 
         let control = build_sse_control(&read_result);
@@ -288,7 +288,7 @@ fn build_sse_byte_stream<S: Storage + 'static>(
                             // Channel closed — final read + emit + end
                             if let Ok(rr) = storage.read(&name, &tail_offset) {
                                 for msg in &rr.messages {
-                                    yield Ok(sse::format_data_frame(&msg.data, is_binary, is_json));
+                                    yield Ok(sse::format_data_frame(msg, is_binary, is_json));
                                 }
                                 let ctrl = build_sse_control(&rr);
                                 yield Ok(sse::format_control_frame(&ctrl));
@@ -319,7 +319,7 @@ fn build_sse_byte_stream<S: Storage + 'static>(
             };
 
             for msg in &rr.messages {
-                yield Ok(sse::format_data_frame(&msg.data, is_binary, is_json));
+                yield Ok(sse::format_data_frame(msg, is_binary, is_json));
             }
 
             let ctrl = build_sse_control(&rr);
@@ -388,7 +388,7 @@ fn handle_long_poll_wake<S: Storage>(
 ///
 /// Format: `"{start_offset}:{end_offset}"` or `"{start_offset}:{end_offset}:c"` if closed at tail.
 fn generate_etag(start_offset: &str, read_result: &ReadResult) -> String {
-    let end_offset = read_result.next_offset.to_string();
+    let end_offset = read_result.next_offset.as_str();
     if read_result.closed && read_result.at_tail {
         format!("\"{start_offset}:{end_offset}:c\"")
     } else {
@@ -401,7 +401,7 @@ fn build_304_response(read_result: &ReadResult) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         names::STREAM_NEXT_OFFSET,
-        read_result.next_offset.to_string().parse().unwrap(),
+        axum::http::HeaderValue::from_bytes(read_result.next_offset.as_str().as_bytes()).unwrap(),
     );
     headers.insert(names::STREAM_UP_TO_DATE, "true".parse().unwrap());
     (StatusCode::NOT_MODIFIED, headers).into_response()
@@ -422,7 +422,7 @@ fn build_data_response(
     headers.insert("content-type", content_type.parse().unwrap());
     headers.insert(
         names::STREAM_NEXT_OFFSET,
-        read_result.next_offset.to_string().parse().unwrap(),
+        axum::http::HeaderValue::from_bytes(read_result.next_offset.as_str().as_bytes()).unwrap(),
     );
     headers.insert(
         names::STREAM_UP_TO_DATE,
@@ -449,7 +449,7 @@ fn build_204_response(next_offset: &Offset, is_closed: bool) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         names::STREAM_NEXT_OFFSET,
-        next_offset.to_string().parse().unwrap(),
+        axum::http::HeaderValue::from_bytes(next_offset.as_str().as_bytes()).unwrap(),
     );
     headers.insert(names::STREAM_UP_TO_DATE, "true".parse().unwrap());
 
@@ -466,19 +466,14 @@ fn build_204_response(next_offset: &Offset, is_closed: bool) -> Response {
 /// Build response body from read result messages.
 fn build_body(read_result: &ReadResult, content_type: &str) -> Result<bytes::Bytes> {
     if json_mode::is_json_content_type(content_type) {
-        let message_data: Vec<_> = read_result
-            .messages
-            .iter()
-            .map(|m| m.data.clone())
-            .collect();
-        json_mode::wrap_read(&message_data)
+        json_mode::wrap_read_iter(read_result.messages.iter())
     } else if read_result.messages.is_empty() {
         Ok(bytes::Bytes::new())
     } else {
-        let total_len: usize = read_result.messages.iter().map(|m| m.data.len()).sum();
+        let total_len: usize = read_result.messages.iter().map(bytes::Bytes::len).sum();
         let mut buf = BytesMut::with_capacity(total_len);
         for message in &read_result.messages {
-            buf.put(message.data.clone());
+            buf.put(message.clone());
         }
         Ok(buf.freeze())
     }

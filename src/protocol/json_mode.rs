@@ -55,21 +55,32 @@ pub fn process_append(data: &[u8]) -> Result<Vec<Bytes>> {
 ///
 /// Panics if serializing the final array fails, which should never happen.
 pub fn wrap_read(messages: &[Bytes]) -> Result<Bytes> {
-    if messages.is_empty() {
-        // Empty stream returns empty array
-        return Ok(Bytes::from_static(b"[]"));
-    }
+    wrap_read_iter(messages.iter())
+}
 
+/// Wrap JSON messages (iterator form) in a JSON array for read responses.
+///
+/// Accepts any iterator of `&Bytes` to avoid intermediate allocations
+/// in handler hot paths.
+///
+/// # Errors
+///
+/// This function currently does not return errors and always returns `Ok`.
+pub fn wrap_read_iter<'a, I>(messages: I) -> Result<Bytes>
+where
+    I: IntoIterator<Item = &'a Bytes>,
+{
     // Stored JSON messages are validated on write; build the array directly
     // to avoid per-message parse + re-serialize in read hot paths.
-    let total_payload_len: usize = messages.iter().map(Bytes::len).sum();
-    let mut out = BytesMut::with_capacity(total_payload_len + messages.len() + 1);
+    let mut out = BytesMut::new();
     out.put_u8(b'[');
-    for (idx, msg) in messages.iter().enumerate() {
-        if idx > 0 {
+    let mut wrote_any = false;
+    for msg in messages {
+        if wrote_any {
             out.put_u8(b',');
         }
         out.extend_from_slice(msg);
+        wrote_any = true;
     }
     out.put_u8(b']');
     Ok(out.freeze())

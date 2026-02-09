@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
+const INITIAL_MESSAGES_CAPACITY: usize = 256;
+const INITIAL_PRODUCERS_CAPACITY: usize = 8;
+
 /// Internal stream entry
 struct StreamEntry {
     config: StreamConfig,
@@ -36,13 +39,13 @@ impl StreamEntry {
         let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
         Self {
             config,
-            messages: Vec::new(),
+            messages: Vec::with_capacity(INITIAL_MESSAGES_CAPACITY),
             closed: false,
             next_read_seq: 0,
             next_byte_offset: 0,
             total_bytes: 0,
             created_at: Utc::now(),
-            producers: HashMap::new(),
+            producers: HashMap::with_capacity(INITIAL_PRODUCERS_CAPACITY),
             notify,
             last_seq: None,
         }
@@ -298,7 +301,10 @@ impl Storage for InMemoryStorage {
             }
         };
 
-        let messages: Vec<Message> = stream.messages[start_idx..].to_vec();
+        let messages: Vec<Bytes> = stream.messages[start_idx..]
+            .iter()
+            .map(|m| m.data.clone())
+            .collect();
 
         let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
 
@@ -558,8 +564,8 @@ mod tests {
 
         let result = storage.read("test", &Offset::start()).unwrap();
         assert_eq!(result.messages.len(), 2);
-        assert_eq!(result.messages[0].data, data1);
-        assert_eq!(result.messages[1].data, data2);
+        assert_eq!(result.messages[0], data1);
+        assert_eq!(result.messages[1], data2);
         assert!(result.at_tail);
     }
 
@@ -646,8 +652,8 @@ mod tests {
 
         let result = storage.read("test", &offset2).unwrap();
         assert_eq!(result.messages.len(), 2);
-        assert_eq!(result.messages[0].data, Bytes::from("msg2"));
-        assert_eq!(result.messages[1].data, Bytes::from("msg3"));
+        assert_eq!(result.messages[0], Bytes::from("msg2"));
+        assert_eq!(result.messages[1], Bytes::from("msg3"));
 
         let result = storage.read("test", &offset1).unwrap();
         assert_eq!(result.messages.len(), 3);
