@@ -15,6 +15,7 @@ Protocol-level implementation decisions are recorded in [`docs/decisions.md`](ht
 | Idempotent close returns 204 | Same status for initial and repeated close |
 | `Stream-Closed: true` on all success responses for closed streams | Consistent header presence lets clients detect closure without HEAD |
 | Sessions + bidirectional DB sync replaces Electric-only test | Sessions pattern is the primary production use case |
+| CORS: allow all origins by default, configurable via `CORS_ORIGINS` | Not part of protocol spec; default suits development, production restricts via env var or proxy |
 
 ## Decision format
 

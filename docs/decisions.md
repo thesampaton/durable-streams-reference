@@ -18,6 +18,7 @@ spec sections or conformance tests (or explicit gap references).
 | `Stream-Closed: true` included in ALL success responses where stream is closed | PROTOCOL.md §5.1, §5.2, §5.3 | Consistent header presence lets clients detect closure without a separate HEAD. Applies to POST close, PUT create-closed, and idempotent replays. | 2026-02-08 |
 
 | Replace Electric-only test with Sessions + bidirectional DB sync | N/A (architecture) | DS is lower-level than Electric; the sessions pattern is the primary production use case. Bidirectional PG sync validates the full data layer (DS for real-time delivery, PG for durable querying). The `integration-test-electric` stub is replaced by `integration-test-sessions` which tests both directions: PG->DS via Electric Shape API, and DS->PG via SSE consumer. | 2026-02-09 |
+| CORS: allow all origins by default, configurable via `CORS_ORIGINS` | Gap: `docs/gaps.md` example entry (CORS not covered by conformance) | CORS is not part of the protocol spec or conformance tests. Default allow-all suits development; production deployments restrict via env var or auth proxy. Keeps CORS config out of protocol semantics. | 2026-02-09 |
 
 ## Decision Entry Format
 
