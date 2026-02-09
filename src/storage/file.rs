@@ -1,6 +1,7 @@
 use super::{
-    CreateStreamResult, CreateWithDataResult, Message, ProducerAppendResult, ReadResult, Storage,
-    StreamConfig, StreamMetadata,
+    CreateStreamResult, CreateWithDataResult, Message, NOTIFY_CHANNEL_CAPACITY,
+    ProducerAppendResult, ProducerCheck, ProducerState, ReadResult, Storage, StreamConfig,
+    StreamMetadata,
 };
 use crate::protocol::error::{Error, Result};
 use crate::protocol::offset::Offset;
@@ -16,27 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
-/// Duration after which stale producer state is cleaned up (7 days).
-const PRODUCER_STATE_TTL_SECS: i64 = 7 * 24 * 60 * 60;
-
-/// Broadcast channel capacity for long-poll/SSE notifications.
-const NOTIFY_CHANNEL_CAPACITY: usize = 16;
-
 /// Binary record header size: little-endian `u32` payload length.
-const RECORD_HEADER_BYTES: u64 = 4;
+const RECORD_HEADER_BYTES: usize = 4;
 
 #[derive(Debug, Clone)]
 struct MessageIndex {
     offset: Offset,
     file_pos: u64,
     byte_len: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProducerState {
-    epoch: u64,
-    last_seq: u64,
-    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,13 +70,6 @@ impl StreamEntry {
             dir,
         }
     }
-
-    fn cleanup_stale_producers(&mut self) {
-        let cutoff = Utc::now()
-            - chrono::TimeDelta::try_seconds(PRODUCER_STATE_TTL_SECS)
-                .expect("7 days fits in TimeDelta");
-        self.producers.retain(|_, state| state.updated_at > cutoff);
-    }
 }
 
 /// High-throughput file-backed storage.
@@ -98,6 +79,7 @@ impl StreamEntry {
 /// - In-memory offset/file index for fast reads
 /// - Stream-level write lock serializes appends and preserves monotonic offsets
 /// - Batched write per append call reduces syscall overhead
+#[allow(clippy::module_name_repetitions)]
 pub struct FileStorage {
     streams: RwLock<HashMap<String, Arc<RwLock<StreamEntry>>>>,
     total_bytes: RwLock<u64>,
@@ -108,6 +90,10 @@ pub struct FileStorage {
 }
 
 impl FileStorage {
+    /// # Errors
+    ///
+    /// Returns `Error::Storage` if the root directory cannot be created or
+    /// existing streams fail to load from disk.
     pub fn new(
         root_dir: impl Into<PathBuf>,
         max_total_bytes: u64,
@@ -134,6 +120,9 @@ impl FileStorage {
         Ok(storage)
     }
 
+    /// # Panics
+    ///
+    /// Panics if the internal `total_bytes` lock is poisoned.
     #[must_use]
     pub fn total_bytes(&self) -> u64 {
         *self.total_bytes.read().expect("total_bytes lock poisoned")
@@ -207,7 +196,7 @@ impl FileStorage {
             .len();
 
         let mut cursor = 0u64;
-        let mut header = [0u8; RECORD_HEADER_BYTES as usize];
+        let mut header = [0u8; RECORD_HEADER_BYTES];
 
         while cursor < file_len {
             file.seek(SeekFrom::Start(cursor))
@@ -221,7 +210,7 @@ impl FileStorage {
                 break;
             }
 
-            if read < RECORD_HEADER_BYTES as usize {
+            if read < RECORD_HEADER_BYTES {
                 file.set_len(cursor).map_err(|e| {
                     Error::Storage(format!("failed to truncate partial record: {e}"))
                 })?;
@@ -229,7 +218,7 @@ impl FileStorage {
             }
 
             let record_len = u64::from(u32::from_le_bytes(header));
-            let record_end = cursor + RECORD_HEADER_BYTES + record_len;
+            let record_end = cursor + RECORD_HEADER_BYTES as u64 + record_len;
 
             if record_end > file_len {
                 file.set_len(cursor).map_err(|e| {
@@ -240,7 +229,7 @@ impl FileStorage {
 
             index.push(MessageIndex {
                 offset: Offset::new(next_read_seq, next_byte_offset),
-                file_pos: cursor + RECORD_HEADER_BYTES,
+                file_pos: cursor + RECORD_HEADER_BYTES as u64,
                 byte_len: record_len,
             });
 
@@ -255,39 +244,16 @@ impl FileStorage {
         Ok((index, next_read_seq, next_byte_offset))
     }
 
-    fn is_expired(entry: &StreamEntry) -> bool {
-        if let Some(expires_at) = entry.config.expires_at {
-            Utc::now() >= expires_at
-        } else {
-            false
-        }
-    }
-
     fn get_stream(&self, name: &str) -> Option<Arc<RwLock<StreamEntry>>> {
         let streams = self.streams.read().expect("streams lock poisoned");
         streams.get(name).map(Arc::clone)
-    }
-
-    fn validate_seq(stream: &StreamEntry, seq: Option<&str>) -> Result<Option<String>> {
-        if let Some(new_seq) = seq {
-            if let Some(ref last) = stream.last_seq
-                && new_seq <= last.as_str()
-            {
-                return Err(Error::SeqOrderingViolation {
-                    last: last.clone(),
-                    received: new_seq.to_string(),
-                });
-            }
-            return Ok(Some(new_seq.to_string()));
-        }
-        Ok(None)
     }
 
     fn append_records(
         &self,
         name: &str,
         stream: &mut StreamEntry,
-        messages: Vec<Bytes>,
+        messages: &[Bytes],
     ) -> Result<()> {
         if messages.is_empty() {
             return Ok(());
@@ -297,7 +263,7 @@ impl FileStorage {
         let mut payload_bytes = 0u64;
         let mut sizes = Vec::with_capacity(messages.len());
 
-        for msg in &messages {
+        for msg in messages {
             let len = u64::try_from(msg.len()).unwrap_or(u64::MAX);
             if len > u64::from(u32::MAX) {
                 return Err(Error::InvalidHeader {
@@ -318,13 +284,10 @@ impl FileStorage {
             return Err(Error::StreamSizeLimitExceeded);
         }
 
-        let mut write_buf = Vec::with_capacity(
-            usize::try_from(
-                payload_bytes + (RECORD_HEADER_BYTES * u64::try_from(messages.len()).unwrap_or(0)),
-            )
-            .unwrap_or(0),
-        );
-        for msg in &messages {
+        let wire_overhead = RECORD_HEADER_BYTES.saturating_mul(messages.len());
+        let mut write_buf =
+            Vec::with_capacity(usize::try_from(payload_bytes).unwrap_or(0) + wire_overhead);
+        for msg in messages {
             let len = u32::try_from(msg.len()).unwrap_or(u32::MAX);
             write_buf.extend_from_slice(&len.to_le_bytes());
             write_buf.extend_from_slice(msg);
@@ -352,13 +315,13 @@ impl FileStorage {
             let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
             stream.index.push(MessageIndex {
                 offset,
-                file_pos: cursor + RECORD_HEADER_BYTES,
+                file_pos: cursor + RECORD_HEADER_BYTES as u64,
                 byte_len: len,
             });
             stream.next_read_seq += 1;
             stream.next_byte_offset += len;
             stream.total_bytes += len;
-            cursor += RECORD_HEADER_BYTES + len;
+            cursor += RECORD_HEADER_BYTES as u64 + len;
         }
 
         let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
@@ -456,7 +419,7 @@ impl FileStorage {
                 dir: path,
             };
 
-            if Self::is_expired(&entry) {
+            if super::is_stream_expired(&entry.config) {
                 Self::remove_stream_dir(&entry.dir)?;
                 continue;
             }
@@ -479,7 +442,7 @@ impl Storage for FileStorage {
         if let Some(stream_arc) = streams.get(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
 
-            if Self::is_expired(&stream) {
+            if super::is_stream_expired(&stream.config) {
                 let stream_bytes = stream.total_bytes;
                 let dir = stream.dir.clone();
                 drop(stream);
@@ -521,7 +484,7 @@ impl Storage for FileStorage {
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -529,17 +492,10 @@ impl Storage for FileStorage {
             return Err(Error::StreamClosed);
         }
 
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
-        }
+        super::validate_content_type(&stream.config.content_type, content_type)?;
 
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
-        self.append_records(name, &mut stream, vec![data])?;
+        self.append_records(name, &mut stream, &[data])?;
         Self::write_metadata_for(name, &stream)?;
         Ok(offset)
     }
@@ -564,7 +520,7 @@ impl Storage for FileStorage {
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -572,17 +528,10 @@ impl Storage for FileStorage {
             return Err(Error::StreamClosed);
         }
 
-        let normalized_ct = content_type.to_lowercase();
-        let expected_ct = stream.config.content_type.to_lowercase();
-        if normalized_ct != expected_ct {
-            return Err(Error::ContentTypeMismatch {
-                expected: stream.config.content_type.clone(),
-                actual: content_type.to_string(),
-            });
-        }
+        super::validate_content_type(&stream.config.content_type, content_type)?;
 
-        let pending_seq = Self::validate_seq(&stream, seq)?;
-        self.append_records(name, &mut stream, messages)?;
+        let pending_seq = super::validate_seq(stream.last_seq.as_deref(), seq)?;
+        self.append_records(name, &mut stream, &messages)?;
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
         }
@@ -598,7 +547,7 @@ impl Storage for FileStorage {
 
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -658,7 +607,7 @@ impl Storage for FileStorage {
 
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -679,7 +628,7 @@ impl Storage for FileStorage {
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
@@ -705,72 +654,36 @@ impl Storage for FileStorage {
 
         let mut stream = stream_arc.write().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return Err(Error::StreamExpired);
         }
 
-        stream.cleanup_stale_producers();
+        super::cleanup_stale_producers(&mut stream.producers);
 
         if !messages.is_empty() {
-            let normalized_ct = content_type.to_lowercase();
-            let expected_ct = stream.config.content_type.to_lowercase();
-            if normalized_ct != expected_ct {
-                return Err(Error::ContentTypeMismatch {
-                    expected: stream.config.content_type.clone(),
-                    actual: content_type.to_string(),
-                });
-            }
+            super::validate_content_type(&stream.config.content_type, content_type)?;
         }
 
         let now = Utc::now();
 
-        if let Some(state) = stream.producers.get(producer.id.as_str()) {
-            if producer.epoch < state.epoch {
-                return Err(Error::EpochFenced {
-                    current: state.epoch,
-                    received: producer.epoch,
-                });
-            }
-
-            if producer.epoch == state.epoch && producer.seq <= state.last_seq {
+        match super::check_producer(
+            stream.producers.get(producer.id.as_str()),
+            producer,
+            stream.closed,
+        )? {
+            ProducerCheck::Accept => {}
+            ProducerCheck::Duplicate { epoch, seq } => {
                 return Ok(ProducerAppendResult::Duplicate {
-                    epoch: state.epoch,
-                    seq: state.last_seq,
+                    epoch,
+                    seq,
                     next_offset: Offset::new(stream.next_read_seq, stream.next_byte_offset),
                     closed: stream.closed,
                 });
             }
-
-            if stream.closed {
-                return Err(Error::StreamClosed);
-            }
-
-            if producer.epoch > state.epoch {
-                if producer.seq != 0 {
-                    return Err(Error::InvalidProducerState(
-                        "new epoch must start at seq 0".to_string(),
-                    ));
-                }
-            } else if producer.seq > state.last_seq + 1 {
-                return Err(Error::SequenceGap {
-                    expected: state.last_seq + 1,
-                    actual: producer.seq,
-                });
-            }
-        } else {
-            if stream.closed {
-                return Err(Error::StreamClosed);
-            }
-            if producer.seq != 0 {
-                return Err(Error::SequenceGap {
-                    expected: 0,
-                    actual: producer.seq,
-                });
-            }
         }
 
-        let pending_seq = Self::validate_seq(&stream, seq)?;
-        self.append_records(name, &mut stream, messages)?;
+        let pending_seq = super::validate_seq(stream.last_seq.as_deref(), seq)?;
+        self.append_records(name, &mut stream, &messages)?;
 
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
@@ -810,7 +723,7 @@ impl Storage for FileStorage {
         if let Some(stream_arc) = streams.get(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
 
-            if Self::is_expired(&stream) {
+            if super::is_stream_expired(&stream.config) {
                 let stream_bytes = stream.total_bytes;
                 let dir = stream.dir.clone();
                 drop(stream);
@@ -844,7 +757,7 @@ impl Storage for FileStorage {
         let mut entry = StreamEntry::new(config, file, dir);
 
         if !messages.is_empty() {
-            self.append_records(name, &mut entry, messages)?;
+            self.append_records(name, &mut entry, &messages)?;
         }
         if should_close {
             entry.closed = true;
@@ -867,7 +780,7 @@ impl Storage for FileStorage {
         let streams = self.streams.read().expect("streams lock poisoned");
         if let Some(stream_arc) = streams.get(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
-            !Self::is_expired(&stream)
+            !super::is_stream_expired(&stream.config)
         } else {
             false
         }
@@ -877,7 +790,7 @@ impl Storage for FileStorage {
         let stream_arc = self.get_stream(name)?;
         let stream = stream_arc.read().expect("stream lock poisoned");
 
-        if Self::is_expired(&stream) {
+        if super::is_stream_expired(&stream.config) {
             return None;
         }
 
@@ -902,30 +815,758 @@ mod tests {
             .expect("file storage should initialize")
     }
 
+    fn producer(id: &str, epoch: u64, seq: u64) -> ProducerHeaders {
+        ProducerHeaders {
+            id: id.to_string(),
+            epoch,
+            seq,
+        }
+    }
+
     #[test]
-    fn test_append_and_read_roundtrip() {
+    fn test_create_stream() {
         let storage = test_storage();
         let config = StreamConfig::new("text/plain".to_string());
 
+        let result = storage.create_stream("test", config.clone()).unwrap();
+        assert_eq!(result, CreateStreamResult::Created);
+        assert!(storage.exists("test"));
+
+        let result = storage.create_stream("test", config).unwrap();
+        assert_eq!(result, CreateStreamResult::AlreadyExists);
+
+        let different_config = StreamConfig::new("application/json".to_string());
+        assert!(matches!(
+            storage.create_stream("test", different_config),
+            Err(Error::ConfigMismatch)
+        ));
+    }
+
+    #[test]
+    fn test_append_and_read() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let data1 = Bytes::from("hello");
+        let offset1 = storage.append("test", data1.clone(), "text/plain").unwrap();
+
+        let data2 = Bytes::from("world");
+        let offset2 = storage.append("test", data2.clone(), "text/plain").unwrap();
+
+        assert!(offset1 < offset2);
+
+        let result = storage.read("test", &Offset::start()).unwrap();
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.messages[0].data, data1);
+        assert_eq!(result.messages[1].data, data2);
+        assert!(result.at_tail);
+    }
+
+    #[test]
+    fn test_offset_monotonicity() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let mut offsets = Vec::new();
+        for i in 0..10 {
+            let data = Bytes::from(format!("message {i}"));
+            let offset = storage.append("test", data, "text/plain").unwrap();
+            offsets.push(offset);
+        }
+
+        for i in 1..offsets.len() {
+            assert!(offsets[i - 1] < offsets[i], "Offset monotonicity violated");
+        }
+    }
+
+    #[test]
+    fn test_read_from_offset() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let offset1 = storage
+            .append("test", Bytes::from("msg1"), "text/plain")
+            .unwrap();
+        let offset2 = storage
+            .append("test", Bytes::from("msg2"), "text/plain")
+            .unwrap();
+        let _offset3 = storage
+            .append("test", Bytes::from("msg3"), "text/plain")
+            .unwrap();
+
+        let result = storage.read("test", &offset2).unwrap();
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.messages[0].data, Bytes::from("msg2"));
+        assert_eq!(result.messages[1].data, Bytes::from("msg3"));
+
+        let result = storage.read("test", &offset1).unwrap();
+        assert_eq!(result.messages.len(), 3);
+    }
+
+    #[test]
+    fn test_read_sentinels() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
         storage
-            .create_stream("test", config)
-            .expect("stream should be created");
+            .append("test", Bytes::from("msg1"), "text/plain")
+            .unwrap();
 
-        let first = storage
-            .append("test", Bytes::from("hello"), "text/plain")
-            .expect("append should succeed");
-        let second = storage
-            .append("test", Bytes::from("world"), "text/plain")
-            .expect("append should succeed");
+        let result = storage.read("test", &Offset::now()).unwrap();
+        assert_eq!(result.messages.len(), 0);
+        assert!(result.at_tail);
 
-        assert!(first < second);
+        let result = storage.read("test", &Offset::start()).unwrap();
+        assert_eq!(result.messages.len(), 1);
+    }
 
-        let read = storage
-            .read("test", &Offset::start())
-            .expect("read should succeed");
-        assert_eq!(read.messages.len(), 2);
-        assert_eq!(read.messages[0].data, Bytes::from("hello"));
-        assert_eq!(read.messages[1].data, Bytes::from("world"));
+    #[test]
+    fn test_stream_closed() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage.close_stream("test").unwrap();
+
+        assert!(matches!(
+            storage.append("test", Bytes::from("data"), "text/plain"),
+            Err(Error::StreamClosed)
+        ));
+
+        let result = storage.read("test", &Offset::start()).unwrap();
+        assert!(result.closed);
+    }
+
+    #[test]
+    fn test_content_type_mismatch() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        assert!(matches!(
+            storage.append("test", Bytes::from("data"), "application/json"),
+            Err(Error::ContentTypeMismatch { .. })
+        ));
+
+        // Case-insensitive match should work
+        storage
+            .append("test", Bytes::from("data"), "TEXT/PLAIN")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_memory_limits() {
+        let root = test_storage_dir();
+        let storage = FileStorage::new(root, 100, 50, false).unwrap();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test1", config.clone()).unwrap();
+        storage.create_stream("test2", config).unwrap();
+
+        storage
+            .append("test1", Bytes::from(vec![0u8; 50]), "text/plain")
+            .unwrap();
+
+        assert!(matches!(
+            storage.append("test1", Bytes::from(vec![0u8; 10]), "text/plain"),
+            Err(Error::StreamSizeLimitExceeded)
+        ));
+
+        storage
+            .append("test2", Bytes::from(vec![0u8; 40]), "text/plain")
+            .unwrap();
+
+        assert!(matches!(
+            storage.append("test2", Bytes::from(vec![0u8; 20]), "text/plain"),
+            Err(Error::MemoryLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn test_batch_append_does_not_advance_stream_seq_on_failed_commit() {
+        let root = test_storage_dir();
+        let storage = FileStorage::new(root, 1024, 8, false).unwrap();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.batch_append("test", oversized, "text/plain", Some("s1"));
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = vec![Bytes::from("ok")];
+        let result = storage.batch_append("test", retry, "text/plain", Some("s1"));
+        assert!(result.is_ok(), "retry with same seq should be accepted");
+    }
+
+    #[test]
+    fn test_producer_append_does_not_advance_stream_seq_on_failed_commit() {
+        let root = test_storage_dir();
+        let storage = FileStorage::new(root, 1024, 8, false).unwrap();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+        let err = storage.append_with_producer(
+            "test",
+            oversized,
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+
+        let retry = storage.append_with_producer(
+            "test",
+            vec![Bytes::from("ok")],
+            "text/plain",
+            &producer("p1", 0, 0),
+            false,
+            Some("s1"),
+        );
+        assert!(
+            matches!(retry, Ok(ProducerAppendResult::Accepted { .. })),
+            "retry with same producer seq and stream seq should succeed"
+        );
+    }
+
+    #[test]
+    fn test_create_with_data_rolls_back_on_memory_limit() {
+        let root = test_storage_dir();
+        let storage = FileStorage::new(root, 1024, 8, false).unwrap();
+        let config = StreamConfig::new("text/plain".to_string());
+        let oversized = vec![Bytes::from(vec![0_u8; 9])];
+
+        let err = storage.create_stream_with_data("test", config, oversized, false);
+        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
+        assert!(
+            !storage.exists("test"),
+            "stream must not exist after failed create"
+        );
+    }
+
+    #[test]
+    fn test_create_with_data_closed_is_atomic() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
+
+        let result = storage
+            .create_stream_with_data("test", config, vec![], true)
+            .unwrap();
+        assert_eq!(result.status, CreateStreamResult::Created);
+        assert!(result.closed, "stream must be closed in result snapshot");
+
+        let meta = storage.head("test").unwrap();
+        assert!(meta.closed, "stream must be closed via head()");
+
+        assert!(matches!(
+            storage.append("test", Bytes::from("data"), "text/plain"),
+            Err(Error::StreamClosed)
+        ));
+    }
+
+    #[test]
+    fn test_create_with_data_appends_and_closes() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
+        let messages = vec![Bytes::from("hello"), Bytes::from("world")];
+
+        let result = storage
+            .create_stream_with_data("test", config, messages, true)
+            .unwrap();
+        assert_eq!(result.status, CreateStreamResult::Created);
+        assert!(result.closed);
+
+        let meta = storage.head("test").unwrap();
+        assert_eq!(meta.message_count, 2);
+        assert!(meta.closed);
+    }
+
+    #[test]
+    fn test_create_with_data_idempotent_ignores_body() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+
+        let r1 = storage
+            .create_stream_with_data("test", config.clone(), vec![Bytes::from("a")], false)
+            .unwrap();
+        assert_eq!(r1.status, CreateStreamResult::Created);
+
+        let r2 = storage
+            .create_stream_with_data("test", config, vec![Bytes::from("b")], false)
+            .unwrap();
+        assert_eq!(r2.status, CreateStreamResult::AlreadyExists);
+
+        let meta = storage.head("test").unwrap();
+        assert_eq!(meta.message_count, 1);
+    }
+
+    #[test]
+    fn test_delete() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append("test", Bytes::from(vec![0u8; 100]), "text/plain")
+            .unwrap();
+
+        let bytes_before = storage.total_bytes();
+        assert!(bytes_before >= 100);
+
+        storage.delete("test").unwrap();
+        assert!(!storage.exists("test"));
+
+        let bytes_after = storage.total_bytes();
+        assert_eq!(bytes_after, 0);
+
+        assert!(matches!(storage.delete("test"), Err(Error::NotFound(_))));
+    }
+
+    #[test]
+    fn test_delete_removes_files() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+        storage
+            .append("test", Bytes::from("data"), "text/plain")
+            .unwrap();
+
+        let dir = storage.stream_dir_for_name("test");
+        assert!(dir.exists(), "stream directory should exist before delete");
+
+        storage.delete("test").unwrap();
+        assert!(
+            !dir.exists(),
+            "stream directory should be removed after delete"
+        );
+    }
+
+    #[test]
+    fn test_head() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append("test", Bytes::from(vec![0u8; 50]), "text/plain")
+            .unwrap();
+        storage
+            .append("test", Bytes::from(vec![0u8; 30]), "text/plain")
+            .unwrap();
+
+        let metadata = storage.head("test").unwrap();
+        assert_eq!(metadata.config.content_type, "text/plain");
+        assert_eq!(metadata.message_count, 2);
+        assert_eq!(metadata.total_bytes, 80);
+        assert!(!metadata.closed);
+
+        storage.close_stream("test").unwrap();
+        let metadata = storage.head("test").unwrap();
+        assert!(metadata.closed);
+    }
+
+    #[test]
+    fn test_producer_basic_append() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let result = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("hello")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            ProducerAppendResult::Accepted {
+                epoch: 0,
+                seq: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_producer_sequential_appends() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        for s in 0..3 {
+            let result = storage
+                .append_with_producer(
+                    "test",
+                    vec![Bytes::from(format!("msg{s}"))],
+                    "text/plain",
+                    &producer("p1", 0, s),
+                    false,
+                    None,
+                )
+                .unwrap();
+            assert!(matches!(
+                result,
+                ProducerAppendResult::Accepted { epoch: 0, seq, .. } if seq == s
+            ));
+        }
+
+        let metadata = storage.head("test").unwrap();
+        assert_eq!(metadata.message_count, 3);
+    }
+
+    #[test]
+    fn test_producer_duplicate_detection() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("hello")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        let result = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("hello")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            ProducerAppendResult::Duplicate {
+                epoch: 0,
+                seq: 0,
+                ..
+            }
+        ));
+
+        let metadata = storage.head("test").unwrap();
+        assert_eq!(metadata.message_count, 1);
+    }
+
+    #[test]
+    fn test_producer_sequence_gap() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("msg0")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        let err = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("msg2")],
+                "text/plain",
+                &producer("p1", 0, 5),
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::SequenceGap {
+                expected: 1,
+                actual: 5
+            }
+        ));
+    }
+
+    #[test]
+    fn test_producer_epoch_fencing() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("msg")],
+                "text/plain",
+                &producer("p1", 1, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        let err = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("zombie")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::EpochFenced {
+                current: 1,
+                received: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn test_producer_epoch_bump_resets_seq() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        for seq in 0..3 {
+            storage
+                .append_with_producer(
+                    "test",
+                    vec![Bytes::from(format!("e0s{seq}"))],
+                    "text/plain",
+                    &producer("p1", 0, seq),
+                    false,
+                    None,
+                )
+                .unwrap();
+        }
+
+        let result = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("e1s0")],
+                "text/plain",
+                &producer("p1", 1, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            ProducerAppendResult::Accepted {
+                epoch: 1,
+                seq: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_producer_epoch_bump_with_nonzero_seq() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("msg")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        let err = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("bad")],
+                "text/plain",
+                &producer("p1", 1, 5),
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidProducerState(_)));
+    }
+
+    #[test]
+    fn test_producer_close_with_append() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let result = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("final")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                true,
+                None,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            ProducerAppendResult::Accepted {
+                epoch: 0,
+                seq: 0,
+                closed: true,
+                ..
+            }
+        ));
+
+        let metadata = storage.head("test").unwrap();
+        assert!(metadata.closed);
+        assert_eq!(metadata.message_count, 1);
+    }
+
+    #[test]
+    fn test_producer_multiple_producers() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("a0")],
+                "text/plain",
+                &producer("a", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("b0")],
+                "text/plain",
+                &producer("b", 0, 0),
+                false,
+                None,
+            )
+            .unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("a1")],
+                "text/plain",
+                &producer("a", 0, 1),
+                false,
+                None,
+            )
+            .unwrap();
+
+        let metadata = storage.head("test").unwrap();
+        assert_eq!(metadata.message_count, 3);
+    }
+
+    #[test]
+    fn test_producer_closed_stream_returns_closed_not_gap() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("final")],
+                "text/plain",
+                &producer("p1", 0, 0),
+                true,
+                None,
+            )
+            .unwrap();
+
+        let err = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("more")],
+                "text/plain",
+                &producer("p1", 0, 5),
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(err, Error::StreamClosed),
+            "Closed stream should return StreamClosed even with gap seq, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_producer_new_with_nonzero_seq_is_gap() {
+        let storage = test_storage();
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let err = storage
+            .append_with_producer(
+                "test",
+                vec![Bytes::from("bad")],
+                "text/plain",
+                &producer("p1", 0, 3),
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::SequenceGap {
+                expected: 0,
+                actual: 3
+            }
+        ));
+    }
+
+    #[test]
+    fn test_not_found() {
+        let storage = test_storage();
+
+        assert!(matches!(
+            storage.append("nonexistent", Bytes::from("data"), "text/plain"),
+            Err(Error::NotFound(_))
+        ));
+
+        assert!(matches!(
+            storage.read("nonexistent", &Offset::start()),
+            Err(Error::NotFound(_))
+        ));
+
+        assert!(matches!(
+            storage.head("nonexistent"),
+            Err(Error::NotFound(_))
+        ));
+
+        assert!(matches!(
+            storage.close_stream("nonexistent"),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]
@@ -957,5 +1598,100 @@ mod tests {
         assert_eq!(read.messages.len(), 2);
         assert_eq!(read.messages[0].data, Bytes::from("event-1"));
         assert_eq!(read.messages[1].data, Bytes::from("event-2"));
+    }
+
+    #[test]
+    fn test_restore_closed_stream_from_disk() {
+        let root = test_storage_dir();
+        let config = StreamConfig::new("text/plain".to_string());
+
+        {
+            let storage = FileStorage::new(root.clone(), 1024 * 1024, 100 * 1024, false).unwrap();
+            storage.create_stream("s", config.clone()).unwrap();
+            storage
+                .append("s", Bytes::from("data"), "text/plain")
+                .unwrap();
+            storage.close_stream("s").unwrap();
+        }
+
+        let restored = FileStorage::new(root, 1024 * 1024, 100 * 1024, false).unwrap();
+        let meta = restored.head("s").unwrap();
+        assert!(meta.closed);
+        assert_eq!(meta.message_count, 1);
+
+        assert!(matches!(
+            restored.append("s", Bytes::from("more"), "text/plain"),
+            Err(Error::StreamClosed)
+        ));
+    }
+
+    #[test]
+    fn test_partial_record_truncation_on_recovery() {
+        let root = test_storage_dir();
+        let config = StreamConfig::new("text/plain".to_string());
+
+        {
+            let storage = FileStorage::new(root.clone(), 1024 * 1024, 100 * 1024, false).unwrap();
+            storage.create_stream("s", config.clone()).unwrap();
+            storage
+                .append("s", Bytes::from("good"), "text/plain")
+                .unwrap();
+        }
+
+        // Append partial garbage to the data log (incomplete record header)
+        let encoded = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode("s".as_bytes());
+        let log_path = root.join(&encoded).join("data.log");
+        let mut f = OpenOptions::new().append(true).open(&log_path).unwrap();
+        // Write a 2-byte partial header (less than the 4-byte record header)
+        f.write_all(&[0xFF, 0xFF]).unwrap();
+        drop(f);
+
+        let restored = FileStorage::new(root, 1024 * 1024, 100 * 1024, false).unwrap();
+        let read = restored.read("s", &Offset::start()).unwrap();
+        assert_eq!(read.messages.len(), 1);
+        assert_eq!(read.messages[0].data, Bytes::from("good"));
+    }
+
+    #[test]
+    fn test_concurrent_appends_monotonicity() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let storage = Arc::new(test_storage());
+        let config = StreamConfig::new("text/plain".to_string());
+        storage.create_stream("test", config).unwrap();
+
+        let mut handles = vec![];
+        for thread_id in 0..5 {
+            let storage_clone = Arc::clone(&storage);
+            let handle = thread::spawn(move || {
+                let mut offsets = Vec::new();
+                for i in 0..20 {
+                    let data = Bytes::from(format!("thread {thread_id} msg {i}"));
+                    let offset = storage_clone.append("test", data, "text/plain").unwrap();
+                    offsets.push(offset);
+                }
+                offsets
+            });
+            handles.push(handle);
+        }
+
+        let mut all_offsets = Vec::new();
+        for handle in handles {
+            let offsets = handle.join().unwrap();
+            all_offsets.extend(offsets);
+        }
+
+        all_offsets.sort();
+        for i in 1..all_offsets.len() {
+            assert_ne!(
+                all_offsets[i - 1],
+                all_offsets[i],
+                "Duplicate offset detected"
+            );
+        }
+
+        let metadata = storage.head("test").unwrap();
+        assert_eq!(metadata.message_count, 100);
     }
 }
