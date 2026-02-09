@@ -16,6 +16,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
+use tracing::warn;
 
 /// Binary record header size: little-endian `u32` payload length.
 const RECORD_HEADER_BYTES: usize = 4;
@@ -255,6 +256,11 @@ impl FileStorage {
         Ok((index, next_read_seq, next_byte_offset))
     }
 
+    fn rollback_total_bytes(&self, bytes: u64) {
+        let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
+        *total = total.saturating_sub(bytes);
+    }
+
     fn get_stream(&self, name: &str) -> Option<Arc<RwLock<StreamEntry>>> {
         let streams = self.streams.read().expect("streams lock poisoned");
         streams.get(name).map(Arc::clone)
@@ -287,12 +293,18 @@ impl FileStorage {
             sizes.push(len);
         }
 
-        let current_total = *self.total_bytes.read().expect("total_bytes lock poisoned");
-        if current_total + total_batch_bytes > self.max_total_bytes {
-            return Err(Error::MemoryLimitExceeded);
-        }
-        if stream.total_bytes + total_batch_bytes > self.max_stream_bytes {
-            return Err(Error::StreamSizeLimitExceeded);
+        // Check-and-reserve global limit atomically under a single write lock
+        // to prevent concurrent appends on different streams from exceeding it.
+        // Global check comes first to preserve error precedence.
+        {
+            let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
+            if *total + total_batch_bytes > self.max_total_bytes {
+                return Err(Error::MemoryLimitExceeded);
+            }
+            if stream.total_bytes + total_batch_bytes > self.max_stream_bytes {
+                return Err(Error::StreamSizeLimitExceeded);
+            }
+            *total += total_batch_bytes;
         }
 
         let wire_overhead = RECORD_HEADER_BYTES.saturating_mul(messages.len());
@@ -304,21 +316,30 @@ impl FileStorage {
             write_buf.extend_from_slice(msg);
         }
 
-        let before_len = stream
-            .file
-            .metadata()
-            .map_err(|e| Error::Storage(format!("failed to stat stream log before append: {e}")))?
-            .len();
+        let before_len = match stream.file.metadata() {
+            Ok(m) => m.len(),
+            Err(e) => {
+                self.rollback_total_bytes(total_batch_bytes);
+                return Err(Error::Storage(format!(
+                    "failed to stat stream log before append: {e}"
+                )));
+            }
+        };
 
-        stream
-            .file
-            .write_all(&write_buf)
-            .map_err(|e| Error::Storage(format!("failed to append stream log for {name}: {e}")))?;
+        if let Err(e) = stream.file.write_all(&write_buf) {
+            self.rollback_total_bytes(total_batch_bytes);
+            return Err(Error::Storage(format!(
+                "failed to append stream log for {name}: {e}"
+            )));
+        }
 
-        if self.sync_on_append {
-            stream.file.sync_data().map_err(|e| {
-                Error::Storage(format!("failed to sync stream log for {name}: {e}"))
-            })?;
+        if self.sync_on_append
+            && let Err(e) = stream.file.sync_data()
+        {
+            self.rollback_total_bytes(total_batch_bytes);
+            return Err(Error::Storage(format!(
+                "failed to sync stream log for {name}: {e}"
+            )));
         }
 
         let mut cursor = before_len;
@@ -334,9 +355,6 @@ impl FileStorage {
             stream.total_bytes += len;
             cursor += RECORD_HEADER_BYTES as u64 + len;
         }
-
-        let mut total = self.total_bytes.write().expect("total_bytes lock poisoned");
-        *total += total_batch_bytes;
 
         let _ = stream.notify.send(());
         Ok(())
@@ -511,7 +529,10 @@ impl Storage for FileStorage {
 
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
         self.append_records(name, &mut stream, &[data])?;
-        Self::write_metadata_for(name, &stream)?;
+        // Data is committed to the log; metadata write failure is non-fatal
+        if let Err(e) = Self::write_metadata_for(name, &stream) {
+            warn!(%e, stream = name, "metadata persist failed after committed append");
+        }
         Ok(offset)
     }
 
@@ -550,7 +571,10 @@ impl Storage for FileStorage {
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
         }
-        Self::write_metadata_for(name, &stream)?;
+        // Data is committed to the log; metadata write failure is non-fatal
+        if let Err(e) = Self::write_metadata_for(name, &stream) {
+            warn!(%e, stream = name, "metadata persist failed after committed batch append");
+        }
 
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))
     }
@@ -716,7 +740,10 @@ impl Storage for FileStorage {
             },
         );
 
-        Self::write_metadata_for(name, &stream)?;
+        // Data is committed to the log; metadata write failure is non-fatal
+        if let Err(e) = Self::write_metadata_for(name, &stream) {
+            warn!(%e, stream = name, "metadata persist failed after committed producer append");
+        }
 
         Ok(ProducerAppendResult::Accepted {
             epoch: producer.epoch,
@@ -818,11 +845,12 @@ mod tests {
     use super::*;
 
     fn test_storage_dir() -> PathBuf {
-        let stamp = Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or_default()
-            .to_string();
-        std::env::temp_dir().join(format!("ds-file-storage-test-{stamp}"))
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let stamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("ds-file-storage-test-{stamp}-{pid}-{seq}"))
     }
 
     fn test_storage() -> FileStorage {
