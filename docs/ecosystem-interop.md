@@ -77,9 +77,121 @@ The client could potentially:
 
 ## Upstream (Electric-SQL / Postgres)
 
-_No observations yet. This section will capture interop issues when the
-Electric-SQL sync layer and Postgres persistence are integrated (e.g., event
-sourcing patterns, replication semantics, connection lifecycle quirks)._
+### CI-002: STATE-PROTOCOL events are opaque JSON to the DS server
+
+**Observed:** 2026-02-09
+**Component:** DS server + sync service
+**Context:** Building the bidirectional sync bridge for durable sessions
+
+**What happened:**
+
+SESSION/STATE-PROTOCOL events (presence, chat messages, user actions) are JSON
+objects with fields like `key`, `type`, `operation`, and `value`. The DS server
+treats these as opaque `application/json` payloads — it stores and delivers them
+without parsing or validating the event structure.
+
+This means the sync service must handle all semantic interpretation: extracting
+`event_key`, `event_type`, and `operation` from the JSON payload for Postgres
+persistence.
+
+**Workaround:**
+
+The sync service parses each SSE data event as JSON and extracts known fields
+before INSERT:
+
+```javascript
+const eventKey = event.key || null;
+const eventType = event.type || null;
+const operation = event.operation || null;
+const payload = JSON.stringify(event);
+```
+
+**Why this is atypical:**
+
+Developers might expect the DS server to understand session event semantics or
+provide structured metadata in headers. Instead, the protocol is intentionally
+content-agnostic — all structure lives in the payload. This is the right design
+(protocol stays simple) but means every consumer must parse events independently.
+
+**Upstream consideration:**
+
+No action needed — this is working as designed. The protocol's content-agnosticism
+is a feature, not a bug. Document the pattern for implementers.
+
+### CI-003: SSE data events for JSON streams are array-wrapped
+
+**Observed:** 2026-02-09
+**Component:** DS server SSE output (`src/protocol/sse.rs`)
+**Context:** Building SSE consumer for Stream→PG sync
+
+**What happened:**
+
+For `application/json` streams, each SSE `event: data` wraps the stored message
+in a JSON array: `data:[{"key":"..."}]` instead of `data:{"key":"..."}`. This is
+per the conformance spec, but means SSE consumers must unwrap the array to get
+individual items.
+
+**Workaround:**
+
+```javascript
+const parsed = JSON.parse(data);
+const items = Array.isArray(parsed) ? parsed : [parsed];
+for (const item of items) { /* process */ }
+```
+
+**Why this is atypical:**
+
+Developers writing SSE consumers for JSON streams would reasonably expect each
+`data:` line to contain a single JSON object (the stored message). The array
+wrapping is a protocol requirement but not immediately obvious from the SSE spec.
+
+**Upstream consideration:**
+
+This is working as designed per the protocol. Should be documented prominently
+in the SSE section of integration guides.
+
+---
+
+### CI-004: Electric Shape API requires `wal_level=logical`
+
+**Observed:** 2026-02-09
+**Component:** `electricsql/electric:1.4` + `postgres:17-alpine`
+**Context:** Setting up PG->DS sync via Electric Shape API
+
+**What happened:**
+
+Electric SQL requires Postgres to be configured with `wal_level=logical` for
+replication slot creation. Without this, Electric fails silently or with
+unhelpful errors during startup.
+
+Additionally, `max_wal_senders` and `max_replication_slots` must be set high
+enough (default of 10 each works for development).
+
+**Workaround:**
+
+Configure Postgres via command-line args in docker-compose:
+
+```yaml
+command:
+  - postgres
+  - -c
+  - wal_level=logical
+  - -c
+  - max_wal_senders=10
+  - -c
+  - max_replication_slots=10
+```
+
+**Why this is atypical:**
+
+Most Postgres Docker setups use default `wal_level=replica`. The requirement
+for `logical` is well-documented in Electric's docs but easy to miss in a
+docker-compose context where you might not think to override Postgres config.
+
+**Upstream consideration:**
+
+Electric's Docker documentation could include a complete docker-compose snippet
+showing the required Postgres configuration.
 
 ---
 

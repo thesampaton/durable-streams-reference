@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-electric docker docker-up docker-down docs clean help
+.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs clean help
 
 # Default target
 help:
@@ -20,7 +20,7 @@ help:
 	@echo "  conformance           - Run external conformance test suite"
 	@echo "  benchmark             - Run benchmark suite (release build)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
-	@echo "  integration-test-electric - Run Electric integration test (Docker)"
+	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker                - Build Docker image"
@@ -131,10 +131,27 @@ integration-test: docker
 	docker-compose down; \
 	exit $$RESULT
 
+integration-test-sessions:
+	@echo "Starting sessions + sync stack..."
+	@docker-compose --profile sync up -d --build; \
+	echo "Waiting for Envoy health check..."; \
+	for i in $$(seq 1 60); do \
+	  curl -s http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
+	done; \
+	echo "Waiting for sync service readiness..."; \
+	for i in $$(seq 1 30); do \
+	  docker-compose logs sync-service 2>&1 | grep -q "Sync service ready" && break; sleep 1; \
+	done; \
+	echo "Running sessions integration tests..."; \
+	cd e2e && npm install && npx vitest run --reporter=verbose sessions.test.mjs; \
+	RESULT=$$?; \
+	echo "Stopping stack..."; \
+	docker-compose --profile sync down; \
+	exit $$RESULT
+
 integration-test-electric:
-	@echo "Electric integration tests not yet implemented"
-	@echo "Will run: docker compose --profile electric up + postgres insertion tests"
-	@exit 1
+	@echo "Replaced by 'make integration-test-sessions'. See docs/decisions.md."
+	@echo "Run: make integration-test-sessions"
 
 # Docker targets
 docker:

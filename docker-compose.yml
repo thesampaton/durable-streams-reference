@@ -19,3 +19,56 @@ services:
       - ./e2e/fixtures/jwks.json:/etc/envoy/jwks.json:ro
     depends_on:
       - server
+
+  postgres:
+    image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    environment:
+      POSTGRES_DB: durable_streams
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "54321:5432"
+    volumes:
+      - ./e2e/sync/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: ["sync"]
+
+  electric:
+    image: electricsql/electric:1.4.2
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/durable_streams?sslmode=disable
+      ELECTRIC_INSECURE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/v1/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: ["sync"]
+
+  sync-service:
+    build: ./e2e/sync
+    environment:
+      ELECTRIC_URL: http://electric:3000
+      DS_SERVER_URL: http://server:4437
+      POSTGRES_URL: postgresql://postgres:password@postgres:5432/durable_streams
+    depends_on:
+      electric:
+        condition: service_healthy
+      server:
+        condition: service_started
+    profiles: ["sync"]
