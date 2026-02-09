@@ -106,7 +106,7 @@ impl Message {
 #[derive(Debug)]
 pub struct ReadResult {
     /// Messages read
-    pub messages: Vec<Message>,
+    pub messages: Vec<Bytes>,
     /// Next offset to read from (for resumption)
     pub next_offset: Offset,
     /// Whether we're at the end of the stream

@@ -1,7 +1,6 @@
 use super::{
-    CreateStreamResult, CreateWithDataResult, Message, NOTIFY_CHANNEL_CAPACITY,
-    ProducerAppendResult, ProducerCheck, ProducerState, ReadResult, Storage, StreamConfig,
-    StreamMetadata,
+    CreateStreamResult, CreateWithDataResult, NOTIFY_CHANNEL_CAPACITY, ProducerAppendResult,
+    ProducerCheck, ProducerState, ReadResult, Storage, StreamConfig, StreamMetadata,
 };
 use crate::protocol::error::{Error, Result};
 use crate::protocol::offset::Offset;
@@ -20,6 +19,8 @@ use tracing::warn;
 
 /// Binary record header size: little-endian `u32` payload length.
 const RECORD_HEADER_BYTES: usize = 4;
+const INITIAL_INDEX_CAPACITY: usize = 256;
+const INITIAL_PRODUCERS_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone)]
 struct MessageIndex {
@@ -60,13 +61,13 @@ impl StreamEntry {
         let file_len = file.metadata().map_or(0, |m| m.len());
         Self {
             config,
-            index: Vec::new(),
+            index: Vec::with_capacity(INITIAL_INDEX_CAPACITY),
             closed: false,
             next_read_seq: 0,
             next_byte_offset: 0,
             total_bytes: 0,
             created_at: Utc::now(),
-            producers: HashMap::new(),
+            producers: HashMap::with_capacity(INITIAL_PRODUCERS_CAPACITY),
             notify,
             last_seq: None,
             file,
@@ -444,7 +445,7 @@ impl FileStorage {
         Ok(())
     }
 
-    fn read_messages(file: &File, index_slice: &[MessageIndex]) -> Result<Vec<Message>> {
+    fn read_messages(file: &File, index_slice: &[MessageIndex]) -> Result<Vec<Bytes>> {
         if index_slice.is_empty() {
             return Ok(Vec::new());
         }
@@ -475,10 +476,7 @@ impl FileStorage {
             let rel_start =
                 usize::try_from(idx.file_pos.saturating_sub(first_pos)).unwrap_or(usize::MAX);
             let rel_end = rel_start + usize::try_from(idx.byte_len).unwrap_or(usize::MAX);
-            messages.push(Message::new(
-                idx.offset.clone(),
-                shared.slice(rel_start..rel_end),
-            ));
+            messages.push(shared.slice(rel_start..rel_end));
         }
 
         Ok(messages)
@@ -1007,8 +1005,8 @@ mod tests {
 
         let result = storage.read("test", &Offset::start()).unwrap();
         assert_eq!(result.messages.len(), 2);
-        assert_eq!(result.messages[0].data, data1);
-        assert_eq!(result.messages[1].data, data2);
+        assert_eq!(result.messages[0], data1);
+        assert_eq!(result.messages[1], data2);
         assert!(result.at_tail);
     }
 
@@ -1048,8 +1046,8 @@ mod tests {
 
         let result = storage.read("test", &offset2).unwrap();
         assert_eq!(result.messages.len(), 2);
-        assert_eq!(result.messages[0].data, Bytes::from("msg2"));
-        assert_eq!(result.messages[1].data, Bytes::from("msg3"));
+        assert_eq!(result.messages[0], Bytes::from("msg2"));
+        assert_eq!(result.messages[1], Bytes::from("msg3"));
 
         let result = storage.read("test", &offset1).unwrap();
         assert_eq!(result.messages.len(), 3);
@@ -1745,8 +1743,8 @@ mod tests {
             .expect("read should succeed");
 
         assert_eq!(read.messages.len(), 2);
-        assert_eq!(read.messages[0].data, Bytes::from("event-1"));
-        assert_eq!(read.messages[1].data, Bytes::from("event-2"));
+        assert_eq!(read.messages[0], Bytes::from("event-1"));
+        assert_eq!(read.messages[1], Bytes::from("event-2"));
     }
 
     #[test]
@@ -1798,7 +1796,7 @@ mod tests {
         let restored = FileStorage::new(root, 1024 * 1024, 100 * 1024, false).unwrap();
         let read = restored.read("s", &Offset::start()).unwrap();
         assert_eq!(read.messages.len(), 1);
-        assert_eq!(read.messages[0].data, Bytes::from("good"));
+        assert_eq!(read.messages[0], Bytes::from("good"));
     }
 
     #[test]
