@@ -3,7 +3,6 @@ use durable_streams_reference::{
     router,
     storage::{Storage, file::FileStorage, memory::InMemoryStorage},
 };
-use std::env;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -27,17 +26,18 @@ async fn main() {
         config.max_memory_bytes,
         config.max_stream_bytes
     );
-    let storage_backend = env::var("STORAGE_BACKEND").unwrap_or_else(|_| "memory".to_string());
-    tracing::info!("Storage backend: {}", storage_backend);
+    tracing::info!("Storage mode: {}", config.storage_mode.as_str());
 
-    if storage_backend.eq_ignore_ascii_case("file") {
-        let root_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| "./data/streams".to_string());
-        let sync_on_append = env::var("FILE_STORAGE_SYNC_ON_APPEND")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
-            .unwrap_or(false);
+    if config.storage_mode.uses_file_backend() {
+        let sync_on_append = config.storage_mode.sync_on_append();
+        tracing::info!(
+            "File storage dir: {}, sync on append: {}",
+            config.storage_dir,
+            sync_on_append
+        );
         let storage = Arc::new(
             FileStorage::new(
-                root_dir,
+                &config.storage_dir,
                 config.max_memory_bytes,
                 config.max_stream_bytes,
                 sync_on_append,

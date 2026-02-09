@@ -1,6 +1,38 @@
 use std::env;
 use std::time::Duration;
 
+/// Storage runtime mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageMode {
+    /// In-memory backend.
+    Memory,
+    /// File backend without fsync/fdatasync on every append.
+    FileFast,
+    /// File backend with fsync/fdatasync on every append.
+    FileDurable,
+}
+
+impl StorageMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::FileFast => "file-fast",
+            Self::FileDurable => "file-durable",
+        }
+    }
+
+    #[must_use]
+    pub fn uses_file_backend(self) -> bool {
+        matches!(self, Self::FileFast | Self::FileDurable)
+    }
+
+    #[must_use]
+    pub fn sync_on_append(self) -> bool {
+        matches!(self, Self::FileDurable)
+    }
+}
+
 /// Server configuration
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -16,6 +48,10 @@ pub struct Config {
     pub long_poll_timeout: Duration,
     /// SSE idle close timeout in seconds (0 disables)
     pub sse_idle_close_secs: u64,
+    /// Selected storage mode
+    pub storage_mode: StorageMode,
+    /// Root directory for file-backed storage
+    pub storage_dir: String,
 }
 
 impl Config {
@@ -38,6 +74,7 @@ impl Config {
         let sse_idle_close_secs: u64 = get("SSE_IDLE_CLOSE_SECS")
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
+        let storage_mode = Self::parse_storage_mode(&get);
 
         Self {
             port: get("PORT").and_then(|s| s.parse().ok()).unwrap_or(4437),
@@ -50,7 +87,43 @@ impl Config {
             cors_origins: get("CORS_ORIGINS").unwrap_or_else(|| "*".to_string()),
             long_poll_timeout: Duration::from_secs(long_poll_secs),
             sse_idle_close_secs,
+            storage_mode,
+            storage_dir: get("STORAGE_DIR").unwrap_or_else(|| "./data/streams".to_string()),
         }
+    }
+
+    fn parse_storage_mode(get: &impl Fn(&str) -> Option<String>) -> StorageMode {
+        if let Some(mode) = get("STORAGE_MODE")
+            && let Some(parsed) = Self::parse_storage_mode_value(&mode)
+        {
+            return parsed;
+        }
+
+        // Backward-compatible fallback for legacy envs.
+        let backend = get("STORAGE_BACKEND").unwrap_or_else(|| "memory".to_string());
+        if backend.eq_ignore_ascii_case("file") {
+            let explicit_sync = get("FILE_STORAGE_SYNC_ON_APPEND").map(|v| Self::parse_bool(&v));
+            return if explicit_sync.unwrap_or(true) {
+                StorageMode::FileDurable
+            } else {
+                StorageMode::FileFast
+            };
+        }
+
+        StorageMode::Memory
+    }
+
+    fn parse_storage_mode_value(raw: &str) -> Option<StorageMode> {
+        match raw.to_ascii_lowercase().as_str() {
+            "memory" => Some(StorageMode::Memory),
+            "file" | "file-durable" | "durable" => Some(StorageMode::FileDurable),
+            "file-fast" | "fast" => Some(StorageMode::FileFast),
+            _ => None,
+        }
+    }
+
+    fn parse_bool(raw: &str) -> bool {
+        matches!(raw, "1" | "true" | "TRUE" | "True")
     }
 }
 
@@ -63,6 +136,8 @@ impl Default for Config {
             cors_origins: "*".to_string(),
             long_poll_timeout: Duration::from_secs(30),
             sse_idle_close_secs: 60,
+            storage_mode: StorageMode::Memory,
+            storage_dir: "./data/streams".to_string(),
         }
     }
 }
@@ -100,6 +175,8 @@ mod tests {
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.storage_mode, StorageMode::Memory);
+        assert_eq!(config.storage_dir, "./data/streams");
     }
 
     #[test]
@@ -111,6 +188,8 @@ mod tests {
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.storage_mode, StorageMode::Memory);
+        assert_eq!(config.storage_dir, "./data/streams");
     }
 
     #[test]
@@ -122,6 +201,8 @@ mod tests {
             ("CORS_ORIGINS", "https://example.com"),
             ("LONG_POLL_TIMEOUT_SECS", "5"),
             ("SSE_IDLE_CLOSE_SECS", "120"),
+            ("STORAGE_MODE", "file-fast"),
+            ("STORAGE_DIR", "/tmp/ds-store"),
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.port, 8080);
@@ -130,6 +211,8 @@ mod tests {
         assert_eq!(config.cors_origins, "https://example.com");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(5));
         assert_eq!(config.sse_idle_close_secs, 120);
+        assert_eq!(config.storage_mode, StorageMode::FileFast);
+        assert_eq!(config.storage_dir, "/tmp/ds-store");
     }
 
     #[test]
@@ -148,6 +231,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.storage_mode, StorageMode::Memory);
     }
 
     #[test]
@@ -161,6 +245,7 @@ mod tests {
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.storage_mode, StorageMode::Memory);
     }
 
     #[test]
@@ -175,6 +260,25 @@ mod tests {
         assert_eq!(via_env.cors_origins, via_lookup.cors_origins);
         assert_eq!(via_env.long_poll_timeout, via_lookup.long_poll_timeout);
         assert_eq!(via_env.sse_idle_close_secs, via_lookup.sse_idle_close_secs);
+        assert_eq!(via_env.storage_mode, via_lookup.storage_mode);
+        assert_eq!(via_env.storage_dir, via_lookup.storage_dir);
+    }
+
+    #[test]
+    fn test_storage_mode_legacy_env_uses_durable_default_for_file() {
+        let get = lookup(&[("STORAGE_BACKEND", "file")]);
+        let config = Config::from_lookup(get);
+        assert_eq!(config.storage_mode, StorageMode::FileDurable);
+    }
+
+    #[test]
+    fn test_storage_mode_legacy_env_allows_explicit_fast_override() {
+        let get = lookup(&[
+            ("STORAGE_BACKEND", "file"),
+            ("FILE_STORAGE_SYNC_ON_APPEND", "false"),
+        ]);
+        let config = Config::from_lookup(get);
+        assert_eq!(config.storage_mode, StorageMode::FileFast);
     }
 
     #[test]

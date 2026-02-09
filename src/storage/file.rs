@@ -540,6 +540,7 @@ impl Storage for FileStorage {
 
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
         self.append_records(name, &mut stream, vec![data])?;
+        Self::write_metadata_for(name, &stream)?;
         Ok(offset)
     }
 
@@ -585,6 +586,7 @@ impl Storage for FileStorage {
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
         }
+        Self::write_metadata_for(name, &stream)?;
 
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))
     }
