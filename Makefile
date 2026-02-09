@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs clean help
+.PHONY: build release lint fmt-check test conformance benchmark integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs clean help dev dev-down dev-ui
 
 # Default target
 help:
@@ -26,6 +26,11 @@ help:
 	@echo "  docker                - Build Docker image"
 	@echo "  docker-up             - Start Docker stack (server + Envoy proxy)"
 	@echo "  docker-down           - Stop Docker stack"
+	@echo ""
+	@echo "Dev Observability:"
+	@echo "  dev                   - Start full observability stack (sync + dev profiles)"
+	@echo "  dev-down              - Stop the dev observability stack"
+	@echo "  dev-ui                - Clone test-ui (once) and run on :3000"
 	@echo ""
 	@echo "Other:"
 	@echo "  docs                  - Build documentation"
@@ -152,6 +157,45 @@ integration-test-sessions:
 integration-test-electric:
 	@echo "Replaced by 'make integration-test-sessions'. See docs/decisions.md."
 	@echo "Run: make integration-test-sessions"
+
+# Dev observability stack
+DEV_UI_DIR := .dev/durable-streams
+
+dev: docker
+	@echo "Starting dev observability stack (sync + dev profiles)..."
+	@docker-compose --profile sync --profile dev up -d --build
+	@echo ""
+	@echo "Dev stack running. Port map:"
+	@echo "  4437  - DS server (direct, no auth)"
+	@echo "  8080  - Envoy proxy (JWT auth)"
+	@echo "  9901  - Envoy admin dashboard"
+	@echo "  54321 - Postgres direct access"
+	@echo "  8081  - Adminer (DB admin UI)"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make dev-ui           - Start test-ui on :3000 (separate terminal)"
+	@echo "  docker-compose logs -f producer  - Watch heartbeat producer"
+	@echo "  http://localhost:8081  - Open Adminer (server: postgres, user: postgres, pw: password)"
+	@echo "  make dev-down         - Stop everything"
+
+dev-down:
+	docker-compose --profile sync --profile dev down
+
+dev-ui:
+	@if [ ! -d "$(DEV_UI_DIR)" ]; then \
+		echo "Cloning durable-streams monorepo (shallow)..."; \
+		mkdir -p .dev; \
+		git clone --depth 1 https://github.com/durable-streams/durable-streams.git $(DEV_UI_DIR); \
+		echo "Installing dependencies..."; \
+		cd $(DEV_UI_DIR) && pnpm install; \
+		echo "Building workspace packages (client, state)..."; \
+		cd $(DEV_UI_DIR) && pnpm --filter @durable-streams/client build && pnpm --filter @durable-streams/state build; \
+	fi
+	@curl -sf http://localhost:4437/healthz > /dev/null 2>&1 || \
+		(echo "ERROR: DS server not reachable on :4437. Run 'make dev' first." && exit 1)
+	@echo "Starting test-ui on http://localhost:3000..."
+	@echo "Connect to DS server at http://localhost:4437"
+	cd $(DEV_UI_DIR)/examples/test-ui && pnpm dev
 
 # Docker targets
 docker:
