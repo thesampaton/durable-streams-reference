@@ -7,31 +7,27 @@ and any behaviour differences or breaking changes.
 
 | Spec SHA | Server Version | Status | Notes | Breaking Changes |
 |----------|----------------|--------|-------|------------------|
-| a347312a47ae510a4a2e3ee7a121d6c8d7d74e50 | 0.1.0 | In Development | Initial implementation targeting conformance v0.2.1 | N/A |
+| a347312a47ae510a4a2e3ee7a121d6c8d7d74e50 | 0.1.0 | Complete | Full conformance with @durable-streams/server-conformance-tests@0.2.1 | N/A |
 
 ## Current Implementation
 
-**Server Version:** 0.1.0 (in development)
+**Server Version:** 0.1.0
 
 **Spec SHA:** a347312a47ae510a4a2e3ee7a121d6c8d7d74e50
 
 **Conformance Version:** 0.2.1
 
-**Target:** Full conformance with ~195 tests in the conformance suite.
-
-**Status:** Implementation in progress. Not yet conformant.
+**Status:** Fully conformant. All 239 conformance tests pass.
 
 ## Conformance Coverage
 
-As of 2026-02-06:
-- Implemented: 0/195 tests
-- Passing: 0/195 tests
-
-(Update this section as implementation progresses)
+As of 2026-02-09:
+- Passing: 239/239 tests
 
 ## Known Limitations
 
-None yet (initial implementation).
+- Storage is in-memory only (no persistence across restarts).
+- See `docs/gaps.md` for spec ambiguities and chosen interpretations.
 
 ## Future Compatibility
 

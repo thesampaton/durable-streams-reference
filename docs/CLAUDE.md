@@ -51,7 +51,7 @@ Pins the protocol spec and conformance test suite:
 
 ### `docs/protocol-governance.md`
 
-Canonical governance policy. Copied from `scratch/protocol-governance.md`. Defines:
+Canonical governance policy. Defines:
 - Decision hierarchy (conformance tests > spec > maintainer clarification > conservative fallback)
 - Spec pinning requirements
 - Traceability requirements
@@ -59,7 +59,7 @@ Canonical governance policy. Copied from `scratch/protocol-governance.md`. Defin
 
 ### `docs/blocker-policy.md`
 
-Canonical blocker policy. Copied from `scratch/blocker-policy.md`. Defines:
+Canonical blocker policy. Defines:
 - What counts as a blocker
 - Where to log blockers (GitHub issues preferred, `docs/blockers.md` fallback)
 - Required issue format
