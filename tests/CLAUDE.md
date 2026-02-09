@@ -40,7 +40,7 @@ scaffolding. The external conformance suite is the ultimate acceptance gate.
 ## Black-Box Testing Requirement
 
 Integration tests MUST NOT:
-- Import server modules directly (no `use durable_streams_rust_server::*`)
+- Import server modules directly (no `use durable_streams_reference::*`)
 - Inspect internal state (no accessing storage directly)
 - Mock server behaviour (no fake servers, use the real binary)
 

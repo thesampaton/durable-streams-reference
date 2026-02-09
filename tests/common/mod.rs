@@ -1,5 +1,5 @@
-use durable_streams_rust_server::config::Config;
-use durable_streams_rust_server::storage::memory::InMemoryStorage;
+use durable_streams_reference::config::Config;
+use durable_streams_reference::storage::memory::InMemoryStorage;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -61,7 +61,7 @@ async fn spawn_test_server_with_config(config: Config) -> (String, u16) {
     ));
 
     // Build and spawn server
-    let app = durable_streams_rust_server::router::build_router(storage, &config);
+    let app = durable_streams_reference::router::build_router(storage, &config);
 
     tokio::spawn(async move {
         axum::serve(listener, app)

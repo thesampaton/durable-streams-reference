@@ -3,8 +3,8 @@
 ## Development setup
 
 ```bash
-git clone https://github.com/thesampaton/durable-streams-rust-server.git
-cd durable-streams-rust-server
+git clone https://github.com/thesampaton/durable-streams-reference.git
+cd durable-streams-reference
 cargo build
 cargo test
 ```
@@ -72,4 +72,4 @@ make docs                      # build mdbook documentation
 
 ## Protocol governance
 
-All protocol-level decisions must comply with the governance policies in [`docs/protocol-governance.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/protocol-governance.md). Key rule: never invent semantics. If it is not in spec or tests, record it as a gap.
+All protocol-level decisions must comply with the governance policies in [`docs/protocol-governance.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/protocol-governance.md). Key rule: never invent semantics. If it is not in spec or tests, record it as a gap.

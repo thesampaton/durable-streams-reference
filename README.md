@@ -1,7 +1,7 @@
-# durable-streams-rust-server
+# durable-streams-reference
 
-[![CI](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml)
-[![Conformance](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml)
+[![CI](https://github.com/thesampaton/durable-streams-reference/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-reference/actions/workflows/ci.yml)
+[![Conformance](https://github.com/thesampaton/durable-streams-reference/actions/workflows/conformance.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-reference/actions/workflows/conformance.yml)
 
 Reference implementation of the [durable streams protocol](https://github.com/durable-streams/durable-streams), built on [Electric SQL](https://electric-sql.com/).
 
