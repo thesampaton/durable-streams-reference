@@ -1,5 +1,5 @@
-.PHONY: build release lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
-.NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file
+.PHONY: build release lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
+.NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file
 
 # Default target
 help:
@@ -25,6 +25,9 @@ help:
 	@echo "  benchmark-node        - Run benchmark-node-memory then benchmark-node-file"
 	@echo "  benchmark-node-memory - Run benchmark suite against Node reference (memory)"
 	@echo "  benchmark-node-file   - Run benchmark suite against Node reference (file)"
+	@echo "  benchmark-caddy       - Run benchmark-caddy-memory then benchmark-caddy-file"
+	@echo "  benchmark-caddy-memory - Run benchmark suite against Caddy plugin (memory)"
+	@echo "  benchmark-caddy-file  - Run benchmark suite against Caddy plugin (file)"
 	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
@@ -167,6 +170,41 @@ benchmark-node-file: node-ref-build $(BENCHMARK_DIR)/node_modules
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "Node reference (file)" 127.0.0.1 $(BENCHMARK_NODE_PORT) / node-file \
 		env NODE_REF_SERVER_MODULE=$(NODE_REF_SERVER_MODULE) MODE=file DATA_DIR=$(BENCHMARK_NODE_FILE_STORAGE_DIR) HOST=127.0.0.1 PORT=$(BENCHMARK_NODE_PORT) node $(NODE_REF_RUNNER)
+
+# Caddy plugin benchmark targets
+# Requires: go (golang.org/dl)
+# Builds the Caddy plugin from .dev/durable-streams/packages/caddy-plugin and benchmarks it.
+CADDY_PLUGIN_DIR := $(NODE_REF_DIR)/packages/caddy-plugin
+CADDY_BINARY := $(CADDY_PLUGIN_DIR)/durable-streams-server
+CADDY_BENCHMARK_PORT := 4439
+CADDY_CADDYFILE_DIR := /tmp/caddy-benchmark
+CADDY_FILE_STORAGE_DIR := /tmp/caddy-benchmark-file-storage
+
+caddy-build:
+	@test -d $(CADDY_PLUGIN_DIR) || (echo "Missing $(CADDY_PLUGIN_DIR). Run 'make dev-ui' first to clone the monorepo." && exit 1)
+	@command -v go >/dev/null 2>&1 || (echo "Go is required to build the Caddy plugin. Install from https://go.dev/dl/" && exit 1)
+	cd $(CADDY_PLUGIN_DIR) && go build -o durable-streams-server ./cmd/caddy
+
+benchmark-caddy: benchmark-caddy-memory benchmark-caddy-file
+	@echo ""
+	@echo "Caddy benchmark comparison files:"
+	@echo "  $(BENCHMARK_DIR)/benchmark-results-caddy-memory.json"
+	@echo "  $(BENCHMARK_DIR)/benchmark-results-caddy-file.json"
+
+benchmark-caddy-memory: caddy-build $(BENCHMARK_DIR)/node_modules
+	@mkdir -p $(CADDY_CADDYFILE_DIR)
+	@printf '{\n\tadmin off\n\tauto_https off\n}\n\n:%s {\n\troute /v1/stream/* {\n\t\tdurable_streams\n\t}\n}\n' $(CADDY_BENCHMARK_PORT) > $(CADDY_CADDYFILE_DIR)/Caddyfile-memory
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "Caddy plugin (memory)" localhost $(CADDY_BENCHMARK_PORT) / caddy-memory \
+		$(CADDY_BINARY) run --config $(CADDY_CADDYFILE_DIR)/Caddyfile-memory
+
+benchmark-caddy-file: caddy-build $(BENCHMARK_DIR)/node_modules
+	@rm -rf $(CADDY_FILE_STORAGE_DIR)
+	@mkdir -p $(CADDY_CADDYFILE_DIR) $(CADDY_FILE_STORAGE_DIR)
+	@printf '{\n\tadmin off\n\tauto_https off\n}\n\n:%s {\n\troute /v1/stream/* {\n\t\tdurable_streams {\n\t\t\tdata_dir %s\n\t\t}\n\t}\n}\n' $(CADDY_BENCHMARK_PORT) $(CADDY_FILE_STORAGE_DIR) > $(CADDY_CADDYFILE_DIR)/Caddyfile-file
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "Caddy plugin (file)" localhost $(CADDY_BENCHMARK_PORT) / caddy-file \
+		$(CADDY_BINARY) run --config $(CADDY_CADDYFILE_DIR)/Caddyfile-file
 
 # End-to-end integration tests against the Docker stack (server + Envoy JWT proxy)
 integration-test: docker
