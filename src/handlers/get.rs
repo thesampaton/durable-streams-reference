@@ -80,16 +80,13 @@ pub async fn read_stream<S: Storage + 'static>(
     if let Some(ref live) = query.live {
         match live.as_str() {
             "long-poll" => {
-                let if_none_match = headers
-                    .get("if-none-match")
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_string);
+                let if_none_match = headers.get("if-none-match").and_then(|v| v.to_str().ok());
                 read_long_poll(
                     &storage,
                     &name,
                     &offset,
                     &raw_offset,
-                    if_none_match.as_ref(),
+                    if_none_match,
                     &content_type,
                     timeout,
                 )
@@ -102,16 +99,13 @@ pub async fn read_stream<S: Storage + 'static>(
             }),
         }
     } else {
-        let if_none_match = headers
-            .get("if-none-match")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
+        let if_none_match = headers.get("if-none-match").and_then(|v| v.to_str().ok());
         read_catch_up(
             &storage,
             &name,
             &offset,
             &raw_offset,
-            if_none_match.as_ref(),
+            if_none_match,
             &content_type,
         )
     }
@@ -123,7 +117,7 @@ fn read_catch_up<S: Storage>(
     name: &str,
     offset: &Offset,
     raw_offset: &str,
-    if_none_match: Option<&String>,
+    if_none_match: Option<&str>,
     content_type: &str,
 ) -> Result<Response> {
     // Read from storage (single snapshot for offsets/closed state)
@@ -132,7 +126,7 @@ fn read_catch_up<S: Storage>(
     // Check 304 Not Modified
     let etag = generate_etag(raw_offset, &read_result);
     if let Some(client_etag) = if_none_match
-        && client_etag == &etag
+        && client_etag == etag
     {
         return Ok(build_304_response(&read_result));
     }
@@ -146,7 +140,7 @@ async fn read_long_poll<S: Storage>(
     name: &str,
     offset: &Offset,
     raw_offset: &str,
-    if_none_match: Option<&String>,
+    if_none_match: Option<&str>,
     content_type: &str,
     timeout: Duration,
 ) -> Result<Response> {
@@ -160,7 +154,7 @@ async fn read_long_poll<S: Storage>(
     // Check 304 Not Modified (same as catch-up)
     let etag = generate_etag(raw_offset, &read_result);
     if let Some(client_etag) = if_none_match
-        && client_etag == &etag
+        && client_etag == etag
     {
         return Ok(build_304_response(&read_result));
     }

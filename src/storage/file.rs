@@ -50,12 +50,14 @@ struct StreamEntry {
     notify: broadcast::Sender<()>,
     last_seq: Option<String>,
     file: File,
+    file_len: u64,
     dir: PathBuf,
 }
 
 impl StreamEntry {
     fn new(config: StreamConfig, file: File, dir: PathBuf) -> Self {
         let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
+        let file_len = file.metadata().map_or(0, |m| m.len());
         Self {
             config,
             index: Vec::new(),
@@ -68,6 +70,7 @@ impl StreamEntry {
             notify,
             last_seq: None,
             file,
+            file_len,
             dir,
         }
     }
@@ -404,15 +407,7 @@ impl FileStorage {
             write_buf.extend_from_slice(msg);
         }
 
-        let before_len = match stream.file.metadata() {
-            Ok(m) => m.len(),
-            Err(e) => {
-                self.rollback_total_bytes(total_batch_bytes);
-                return Err(Error::Storage(format!(
-                    "failed to stat stream log before append: {e}"
-                )));
-            }
-        };
+        let before_len = stream.file_len;
 
         if let Err(e) = stream.file.write_all(&write_buf) {
             self.rollback_total_bytes(total_batch_bytes);
@@ -443,28 +438,47 @@ impl FileStorage {
             stream.total_bytes += len;
             cursor += RECORD_HEADER_BYTES as u64 + len;
         }
+        stream.file_len = cursor;
 
         let _ = stream.notify.send(());
         Ok(())
     }
 
     fn read_messages(file: &File, index_slice: &[MessageIndex]) -> Result<Vec<Message>> {
-        let mut messages = Vec::with_capacity(index_slice.len());
+        if index_slice.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut reader = file
             .try_clone()
             .map_err(|e| Error::Storage(format!("failed to clone stream file handle: {e}")))?;
 
+        let first_pos = index_slice[0].file_pos;
+        let last = index_slice
+            .last()
+            .expect("index_slice non-empty due early return");
+        let read_end = last.file_pos + last.byte_len;
+        let read_len = read_end.saturating_sub(first_pos);
+
+        reader
+            .seek(SeekFrom::Start(first_pos))
+            .map_err(|e| Error::Storage(format!("failed to seek message data: {e}")))?;
+
+        let mut raw = vec![0u8; usize::try_from(read_len).unwrap_or(usize::MAX)];
+        reader
+            .read_exact(&mut raw)
+            .map_err(|e| Error::Storage(format!("failed to read message data: {e}")))?;
+
+        let shared = Bytes::from(raw);
+        let mut messages = Vec::with_capacity(index_slice.len());
         for idx in index_slice {
-            reader
-                .seek(SeekFrom::Start(idx.file_pos))
-                .map_err(|e| Error::Storage(format!("failed to seek message data: {e}")))?;
-
-            let mut buf = vec![0u8; usize::try_from(idx.byte_len).unwrap_or(usize::MAX)];
-            reader
-                .read_exact(&mut buf)
-                .map_err(|e| Error::Storage(format!("failed to read message data: {e}")))?;
-
-            messages.push(Message::new(idx.offset.clone(), Bytes::from(buf)));
+            let rel_start =
+                usize::try_from(idx.file_pos.saturating_sub(first_pos)).unwrap_or(usize::MAX);
+            let rel_end = rel_start + usize::try_from(idx.byte_len).unwrap_or(usize::MAX);
+            messages.push(Message::new(
+                idx.offset.clone(),
+                shared.slice(rel_start..rel_end),
+            ));
         }
 
         Ok(messages)
@@ -523,6 +537,10 @@ impl FileStorage {
             let mut file = self.open_stream_file(&path)?;
             let (index, next_read_seq, next_byte_offset) = Self::rebuild_index(&mut file)?;
             let total_bytes = next_byte_offset;
+            let file_len = file
+                .metadata()
+                .map_err(|e| Error::Storage(format!("failed to stat stream log: {e}")))?
+                .len();
 
             let (notify, _) = broadcast::channel(NOTIFY_CHANNEL_CAPACITY);
             let entry = StreamEntry {
@@ -537,6 +555,7 @@ impl FileStorage {
                 notify,
                 last_seq: meta.last_seq,
                 file,
+                file_len,
                 dir: path,
             };
 
@@ -618,10 +637,7 @@ impl Storage for FileStorage {
 
         let offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
         self.append_records(name, &mut stream, &[data])?;
-        // Data is committed to the log; metadata write failure is non-fatal
-        if let Err(e) = self.write_metadata_for(name, &stream) {
-            warn!(%e, stream = name, "metadata persist failed after committed append");
-        }
+        // Plain appends do not mutate persisted metadata fields (closed/seq/producers).
         Ok(offset)
     }
 
@@ -659,10 +675,10 @@ impl Storage for FileStorage {
         self.append_records(name, &mut stream, &messages)?;
         if let Some(new_seq) = pending_seq {
             stream.last_seq = Some(new_seq);
-        }
-        // Data is committed to the log; metadata write failure is non-fatal
-        if let Err(e) = self.write_metadata_for(name, &stream) {
-            warn!(%e, stream = name, "metadata persist failed after committed batch append");
+            // Stream-Seq changed, persist metadata best-effort.
+            if let Err(e) = self.write_metadata_for(name, &stream) {
+                warn!(%e, stream = name, "metadata persist failed after batch append");
+            }
         }
 
         Ok(Offset::new(stream.next_read_seq, stream.next_byte_offset))

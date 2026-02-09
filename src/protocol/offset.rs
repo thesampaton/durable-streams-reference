@@ -25,7 +25,24 @@ impl Offset {
     /// Generates the canonical offset format: `{read_seq:016x}_{byte_offset:016x}`
     #[must_use]
     pub fn new(read_seq: u64, byte_offset: u64) -> Self {
-        Self(format!("{read_seq:016x}_{byte_offset:016x}"))
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut raw = [0u8; 33];
+
+        for (i, slot) in raw[..16].iter_mut().enumerate() {
+            let shift = (15 - i) * 4;
+            *slot = HEX[((read_seq >> shift) & 0xF) as usize];
+        }
+        raw[16] = b'_';
+        for (i, slot) in raw[17..].iter_mut().enumerate() {
+            let shift = (15 - i) * 4;
+            *slot = HEX[((byte_offset >> shift) & 0xF) as usize];
+        }
+
+        let mut s = String::with_capacity(33);
+        for &b in &raw {
+            s.push(char::from(b));
+        }
+        Self(s)
     }
 
     /// Create the stream start sentinel
@@ -73,13 +90,10 @@ impl Offset {
             return None;
         }
 
-        let parts: Vec<&str> = self.0.split('_').collect();
-        if parts.len() != 2 {
-            return None;
-        }
+        let (read_seq_raw, byte_offset_raw) = self.0.split_once('_')?;
 
-        let read_seq = u64::from_str_radix(parts[0], 16).ok()?;
-        let byte_offset = u64::from_str_radix(parts[1], 16).ok()?;
+        let read_seq = u64::from_str_radix(read_seq_raw, 16).ok()?;
+        let byte_offset = u64::from_str_radix(byte_offset_raw, 16).ok()?;
 
         Some((read_seq, byte_offset))
     }
@@ -95,15 +109,14 @@ impl FromStr for Offset {
         }
 
         // Validate format: {hex}_{hex}
-        let parts: Vec<&str> = s.split('_').collect();
-        if parts.len() != 2 {
+        let Some((read_seq_raw, byte_offset_raw)) = s.split_once('_') else {
             return Err(Error::InvalidOffset(format!(
                 "Expected format 'read_seq_byte_offset', got '{s}'"
             )));
-        }
+        };
 
         // Validate both parts are exactly 16 hex digits
-        for (i, part) in parts.iter().enumerate() {
+        for (i, part) in [read_seq_raw, byte_offset_raw].into_iter().enumerate() {
             if part.len() != 16 {
                 return Err(Error::InvalidOffset(format!(
                     "Expected 16 hex digits for part {}, got {} digits in '{s}'",
@@ -129,7 +142,8 @@ impl FromStr for Offset {
         }
 
         // Validate parseable
-        if u64::from_str_radix(parts[0], 16).is_err() || u64::from_str_radix(parts[1], 16).is_err()
+        if u64::from_str_radix(read_seq_raw, 16).is_err()
+            || u64::from_str_radix(byte_offset_raw, 16).is_err()
         {
             return Err(Error::InvalidOffset(format!(
                 "Failed to parse hex values in '{s}'"
