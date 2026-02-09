@@ -1,0 +1,8 @@
+[book]
+title = "Durable Streams Rust Server"
+authors = ["Sam Paton"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"

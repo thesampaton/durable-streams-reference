@@ -4,3 +4,4 @@
 .claude/settings.local.json
 e2e/node_modules/
 .dev/
+docs/book/book/
