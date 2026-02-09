@@ -25,6 +25,7 @@ help:
 	@echo "  benchmark-node        - Run benchmark-node-memory then benchmark-node-file"
 	@echo "  benchmark-node-memory - Run benchmark suite against Node reference (memory)"
 	@echo "  benchmark-node-file   - Run benchmark suite against Node reference (file)"
+	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
 	@echo ""
@@ -105,6 +106,14 @@ BENCHMARK_DIR := /tmp/benchmark-run
 BENCHMARK_VERSION := 0.2.1
 BENCHMARK_PORT := 4437
 BENCHMARK_FILE_STORAGE_DIR := /tmp/benchmark-file-storage
+BENCHMARK_MAX_MEMORY_BYTES ?= 536870912
+BENCHMARK_MAX_STREAM_BYTES ?= 268435456
+BENCHMARK_VERBOSE ?= 0
+ifeq ($(BENCHMARK_VERBOSE),1)
+BENCHMARK_VITEST_FLAGS := --reporter=verbose
+else
+BENCHMARK_VITEST_FLAGS := --silent=passed-only
+endif
 BENCHMARK_NODE_PORT := 4438
 BENCHMARK_NODE_FILE_STORAGE_DIR := /tmp/node-ref-file-store
 NODE_REF_DIR := .dev/durable-streams
@@ -127,9 +136,18 @@ benchmark: benchmark-memory benchmark-file
 
 benchmark-memory: release $(BENCHMARK_DIR)/node_modules
 	@set -e; \
+	SERVER_PID=""; \
+	cleanup() { \
+		if [ -n "$$SERVER_PID" ]; then \
+			kill $$SERVER_PID 2>/dev/null || true; \
+			wait $$SERVER_PID 2>/dev/null || true; \
+			SERVER_PID=""; \
+		fi; \
+	}; \
+	trap cleanup EXIT INT TERM; \
 	echo ""; \
 	echo "=== Benchmark backend: memory ==="; \
-	STORAGE_MODE=memory cargo run --release & SERVER_PID=$$!; \
+	PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=memory cargo run --release & SERVER_PID=$$!; \
 	echo "Waiting for health check on :$(BENCHMARK_PORT)..."; \
 	HEALTHY=0; \
 	for i in $$(seq 1 30); do \
@@ -150,11 +168,10 @@ benchmark-memory: release $(BENCHMARK_DIR)/node_modules
 		exit 1; \
 	fi; \
 	echo "Running benchmarks for memory storage..."; \
-	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://localhost:$(BENCHMARK_PORT) npx vitest bench --reporter=verbose benchmark.bench.mjs; \
+	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://localhost:$(BENCHMARK_PORT) npx vitest bench --run $(BENCHMARK_VITEST_FLAGS) benchmark.bench.mjs; \
 	RESULT=$$?; \
 	echo "Stopping server for memory..."; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	wait $$SERVER_PID 2>/dev/null || true; \
+	cleanup; \
 	for i in $$(seq 1 10); do \
 		if curl -s http://localhost:$(BENCHMARK_PORT)/healthz > /dev/null 2>&1; then \
 			sleep 1; \
@@ -170,10 +187,19 @@ benchmark-memory: release $(BENCHMARK_DIR)/node_modules
 
 benchmark-file: release $(BENCHMARK_DIR)/node_modules
 	@set -e; \
+	SERVER_PID=""; \
+	cleanup() { \
+		if [ -n "$$SERVER_PID" ]; then \
+			kill $$SERVER_PID 2>/dev/null || true; \
+			wait $$SERVER_PID 2>/dev/null || true; \
+			SERVER_PID=""; \
+		fi; \
+	}; \
+	trap cleanup EXIT INT TERM; \
 	echo ""; \
 	echo "=== Benchmark backend: file ==="; \
 	rm -rf $(BENCHMARK_FILE_STORAGE_DIR); \
-	STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release & SERVER_PID=$$!; \
+	PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release & SERVER_PID=$$!; \
 	echo "Waiting for health check on :$(BENCHMARK_PORT)..."; \
 	HEALTHY=0; \
 	for i in $$(seq 1 30); do \
@@ -194,11 +220,10 @@ benchmark-file: release $(BENCHMARK_DIR)/node_modules
 		exit 1; \
 	fi; \
 	echo "Running benchmarks for file storage..."; \
-	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://localhost:$(BENCHMARK_PORT) npx vitest bench --reporter=verbose benchmark.bench.mjs; \
+	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://localhost:$(BENCHMARK_PORT) npx vitest bench --run $(BENCHMARK_VITEST_FLAGS) benchmark.bench.mjs; \
 	RESULT=$$?; \
 	echo "Stopping server for file..."; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	wait $$SERVER_PID 2>/dev/null || true; \
+	cleanup; \
 	for i in $$(seq 1 10); do \
 		if curl -s http://localhost:$(BENCHMARK_PORT)/healthz > /dev/null 2>&1; then \
 			sleep 1; \
@@ -224,6 +249,15 @@ node-ref-build:
 
 benchmark-node-memory: node-ref-build $(BENCHMARK_DIR)/node_modules
 	@set -e; \
+	SERVER_PID=""; \
+	cleanup() { \
+		if [ -n "$$SERVER_PID" ]; then \
+			kill $$SERVER_PID 2>/dev/null || true; \
+			wait $$SERVER_PID 2>/dev/null || true; \
+			SERVER_PID=""; \
+		fi; \
+	}; \
+	trap cleanup EXIT INT TERM; \
 	echo ""; \
 	echo "=== Node reference benchmark backend: memory ==="; \
 	NODE_REF_SERVER_MODULE=$(NODE_REF_SERVER_MODULE) MODE=memory HOST=127.0.0.1 PORT=$(BENCHMARK_NODE_PORT) node $(NODE_REF_RUNNER) & SERVER_PID=$$!; \
@@ -245,10 +279,9 @@ benchmark-node-memory: node-ref-build $(BENCHMARK_DIR)/node_modules
 		wait $$SERVER_PID 2>/dev/null || true; \
 		exit 1; \
 	fi; \
-	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://127.0.0.1:$(BENCHMARK_NODE_PORT) npx vitest bench --reporter=verbose benchmark.bench.mjs; \
+	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://127.0.0.1:$(BENCHMARK_NODE_PORT) npx vitest bench --run $(BENCHMARK_VITEST_FLAGS) benchmark.bench.mjs; \
 	RESULT=$$?; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	wait $$SERVER_PID 2>/dev/null || true; \
+	cleanup; \
 	if [ -f $(BENCHMARK_DIR)/benchmark-results.json ]; then \
 		cp $(BENCHMARK_DIR)/benchmark-results.json $(BENCHMARK_DIR)/benchmark-results-node-memory.json; \
 		echo "Saved node-memory results to $(BENCHMARK_DIR)/benchmark-results-node-memory.json"; \
@@ -257,6 +290,15 @@ benchmark-node-memory: node-ref-build $(BENCHMARK_DIR)/node_modules
 
 benchmark-node-file: node-ref-build $(BENCHMARK_DIR)/node_modules
 	@set -e; \
+	SERVER_PID=""; \
+	cleanup() { \
+		if [ -n "$$SERVER_PID" ]; then \
+			kill $$SERVER_PID 2>/dev/null || true; \
+			wait $$SERVER_PID 2>/dev/null || true; \
+			SERVER_PID=""; \
+		fi; \
+	}; \
+	trap cleanup EXIT INT TERM; \
 	echo ""; \
 	echo "=== Node reference benchmark backend: file ==="; \
 	rm -rf $(BENCHMARK_NODE_FILE_STORAGE_DIR); \
@@ -279,10 +321,9 @@ benchmark-node-file: node-ref-build $(BENCHMARK_DIR)/node_modules
 		wait $$SERVER_PID 2>/dev/null || true; \
 		exit 1; \
 	fi; \
-	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://127.0.0.1:$(BENCHMARK_NODE_PORT) npx vitest bench --reporter=verbose benchmark.bench.mjs; \
+	cd $(BENCHMARK_DIR) && BENCHMARK_URL=http://127.0.0.1:$(BENCHMARK_NODE_PORT) npx vitest bench --run $(BENCHMARK_VITEST_FLAGS) benchmark.bench.mjs; \
 	RESULT=$$?; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	wait $$SERVER_PID 2>/dev/null || true; \
+	cleanup; \
 	if [ -f $(BENCHMARK_DIR)/benchmark-results.json ]; then \
 		cp $(BENCHMARK_DIR)/benchmark-results.json $(BENCHMARK_DIR)/benchmark-results-node-file.json; \
 		echo "Saved node-file results to $(BENCHMARK_DIR)/benchmark-results-node-file.json"; \
