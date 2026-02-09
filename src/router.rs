@@ -1,7 +1,7 @@
 use crate::config::{Config, LongPollTimeout, SseIdleClose};
 use crate::{handlers, middleware, storage::Storage};
-use axum::{Extension, Router, middleware as axum_middleware, routing::get};
 use axum::http::HeaderValue;
+use axum::{Extension, Router, middleware as axum_middleware, routing::get};
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
