@@ -128,9 +128,20 @@ impl FileStorage {
         *self.total_bytes.read().expect("total_bytes lock poisoned")
     }
 
-    fn stream_dir_for_name(&self, name: &str) -> PathBuf {
+    /// Map a stream name to a directory path inside `root_dir`.
+    ///
+    /// Uses base64url encoding (alphabet `[A-Za-z0-9_-]`) so the output
+    /// cannot contain path separators, but we verify containment anyway
+    /// as defense in depth.
+    fn stream_dir_for_name(&self, name: &str) -> Result<PathBuf> {
         let encoded = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(name.as_bytes());
-        self.root_dir.join(encoded)
+        let dir = self.root_dir.join(&encoded);
+        if !dir.starts_with(&self.root_dir) {
+            return Err(Error::Storage(format!(
+                "stream directory escapes storage root: {encoded}"
+            )));
+        }
+        Ok(dir)
     }
 
     fn data_log_path(dir: &Path) -> PathBuf {
@@ -380,6 +391,10 @@ impl FileStorage {
             if !path.is_dir() {
                 continue;
             }
+            // Skip entries that escape root_dir (e.g. symlinks pointing outside)
+            if !path.starts_with(&self.root_dir) {
+                continue;
+            }
 
             let meta_path = Self::meta_path(&path);
             if !meta_path.exists() {
@@ -460,7 +475,7 @@ impl Storage for FileStorage {
             }
         }
 
-        let dir = self.stream_dir_for_name(name);
+        let dir = self.stream_dir_for_name(name)?;
         fs::create_dir_all(&dir).map_err(|e| {
             Error::Storage(format!(
                 "failed to create stream directory {}: {e}",
@@ -745,7 +760,7 @@ impl Storage for FileStorage {
             }
         }
 
-        let dir = self.stream_dir_for_name(name);
+        let dir = self.stream_dir_for_name(name)?;
         fs::create_dir_all(&dir).map_err(|e| {
             Error::Storage(format!(
                 "failed to create stream directory {}: {e}",
@@ -1135,7 +1150,7 @@ mod tests {
             .append("test", Bytes::from("data"), "text/plain")
             .unwrap();
 
-        let dir = storage.stream_dir_for_name("test");
+        let dir = storage.stream_dir_for_name("test").unwrap();
         assert!(dir.exists(), "stream directory should exist before delete");
 
         storage.delete("test").unwrap();
