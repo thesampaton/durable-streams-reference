@@ -200,6 +200,83 @@ E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose sessions.te
 | `DS_SERVER_URL` | `http://server:4437` | DS server (internal, no auth) |
 | `POSTGRES_URL` | `postgresql://postgres:password@postgres:5432/durable_streams` | Postgres connection |
 
+## Dev Observability Mode
+
+A long-running dev mode that lets you visually watch data flow through the full
+stack: streams in a browser UI, rows appearing in Postgres via Adminer, and a
+slow heartbeat producer exercising both sync directions.
+
+### Running
+
+```bash
+# Terminal 1: Start the full stack (server, Envoy, Postgres, Electric,
+# sync-service, Adminer, heartbeat producer)
+make dev
+
+# Terminal 2: Start the visual stream browser (first run clones & installs)
+make dev-ui
+```
+
+### Port map
+
+| Port | Service | Purpose |
+|------|---------|---------|
+| 4437 | server | DS server (direct, no auth) |
+| 8080 | envoy | JWT auth proxy |
+| 9901 | envoy | Envoy admin dashboard |
+| 54321 | postgres | Postgres direct access |
+| 8081 | adminer | Database admin UI |
+| 3000 | test-ui | Visual stream browser (host, via `make dev-ui`) |
+
+### Heartbeat producer
+
+The producer alternates between two sync directions every 5 seconds:
+
+- **Odd ticks (PG->DS):** INSERTs into the `items` Postgres table. Electric
+  picks up the WAL change, sync-service forwards it to the `pg-items` DS stream.
+- **Even ticks (DS->PG):** POSTs a session event to the `session-events` DS
+  stream. Sync-service picks it up via SSE and INSERTs into the
+  `session_events` Postgres table.
+
+Watch the producer logs:
+```bash
+docker-compose logs -f producer
+```
+
+After ~30 seconds, both `items` and `session_events` tables will have heartbeat
+rows visible in Adminer.
+
+### Adminer
+
+Open http://localhost:8081 to browse Postgres tables.
+
+| Field | Value |
+|-------|-------|
+| System | PostgreSQL |
+| Server | postgres |
+| Username | postgres |
+| Password | password |
+| Database | durable_streams |
+
+### Test UI
+
+The test-ui is the official durable-streams stream browser from the
+[durable-streams monorepo](https://github.com/durable-streams/durable-streams/tree/main/examples/test-ui).
+It is cloned into `.dev/` (gitignored) on first run.
+
+**Known limitation:** The server doesn't implement the `__registry__` stream
+used for auto-discovery. Streams won't auto-populate in the sidebar, but the
+producer's streams (`pg-items`, `session-events`) can be navigated to manually.
+
+**Requirements:** pnpm, Node 22+
+
+### Cleanup
+
+```bash
+make dev-down          # stop all containers
+rm -rf .dev/           # remove cloned test-ui monorepo
+```
+
 ## Envoy Configuration
 
 Key settings in `envoy.yaml`:
