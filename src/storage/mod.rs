@@ -1,3 +1,4 @@
+pub mod file;
 pub mod memory;
 
 use crate::protocol::error::Result;
@@ -16,7 +17,7 @@ use tokio::sync::broadcast;
 /// comparison therefore ignores `expires_at` in that case.  When
 /// `ttl_seconds` is `None` and `expires_at` was set directly (via
 /// `Expires-At` header), the parsed timestamp is stable so we compare it.
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StreamConfig {
     /// Content-Type header value (normalized, lowercase)
     pub content_type: String,
