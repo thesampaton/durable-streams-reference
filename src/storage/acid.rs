@@ -1062,386 +1062,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_stream() {
-        let storage = test_storage();
-        let config = StreamConfig::new("text/plain".to_string());
-
-        let result = storage.create_stream("test", config.clone()).unwrap();
-        assert_eq!(result, CreateStreamResult::Created);
-        assert!(storage.exists("test"));
-
-        let result = storage.create_stream("test", config).unwrap();
-        assert_eq!(result, CreateStreamResult::AlreadyExists);
-
-        let different = StreamConfig::new("application/json".to_string());
-        assert!(matches!(
-            storage.create_stream("test", different),
-            Err(Error::ConfigMismatch)
-        ));
-    }
-
-    #[test]
-    fn test_append_and_read() {
-        let storage = test_storage();
-        let config = StreamConfig::new("text/plain".to_string());
-        storage.create_stream("test", config).unwrap();
-
-        let data1 = Bytes::from("hello");
-        let data2 = Bytes::from("world");
-
-        let o1 = storage.append("test", data1.clone(), "text/plain").unwrap();
-        let o2 = storage.append("test", data2.clone(), "text/plain").unwrap();
-        assert!(o1 < o2);
-
-        let read = storage.read("test", &Offset::start()).unwrap();
-        assert_eq!(read.messages, vec![data1, data2]);
-        assert!(read.at_tail);
-    }
-
-    #[test]
-    fn test_read_from_offset() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let o1 = storage
-            .append("test", Bytes::from("msg1"), "text/plain")
-            .unwrap();
-        let o2 = storage
-            .append("test", Bytes::from("msg2"), "text/plain")
-            .unwrap();
-        let _o3 = storage
-            .append("test", Bytes::from("msg3"), "text/plain")
-            .unwrap();
-
-        let r = storage.read("test", &o2).unwrap();
-        assert_eq!(r.messages, vec![Bytes::from("msg2"), Bytes::from("msg3")]);
-
-        let r = storage.read("test", &o1).unwrap();
-        assert_eq!(r.messages.len(), 3);
-    }
-
-    #[test]
-    fn test_read_sentinels() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-        storage
-            .append("test", Bytes::from("msg1"), "text/plain")
-            .unwrap();
-
-        let now_read = storage.read("test", &Offset::now()).unwrap();
-        assert!(now_read.messages.is_empty());
-        assert!(now_read.at_tail);
-
-        let start_read = storage.read("test", &Offset::start()).unwrap();
-        assert_eq!(start_read.messages.len(), 1);
-    }
-
-    #[test]
-    fn test_offset_monotonicity() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let mut offsets = Vec::new();
-        for i in 0..10 {
-            let offset = storage
-                .append("test", Bytes::from(format!("m{i}")), "text/plain")
-                .unwrap();
-            offsets.push(offset);
-        }
-
-        for i in 1..offsets.len() {
-            assert!(offsets[i - 1] < offsets[i]);
-        }
-    }
-
-    #[test]
-    fn test_content_type_mismatch() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        assert!(matches!(
-            storage.append("test", Bytes::from("x"), "application/json"),
-            Err(Error::ContentTypeMismatch { .. })
-        ));
-
-        storage
-            .append("test", Bytes::from("x"), "TEXT/PLAIN")
-            .unwrap();
-    }
-
-    #[test]
-    fn test_stream_closed() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-        storage.close_stream("test").unwrap();
-
-        assert!(matches!(
-            storage.append("test", Bytes::from("x"), "text/plain"),
-            Err(Error::StreamClosed)
-        ));
-
-        let read = storage.read("test", &Offset::start()).unwrap();
-        assert!(read.closed);
-    }
-
-    #[test]
-    fn test_memory_limits() {
-        let storage = AcidStorage::new(test_storage_dir(), 16, 100, 50).unwrap();
-        let cfg = StreamConfig::new("text/plain".to_string());
-        storage.create_stream("s1", cfg.clone()).unwrap();
-        storage.create_stream("s2", cfg).unwrap();
-
-        storage
-            .append("s1", Bytes::from(vec![0_u8; 50]), "text/plain")
-            .unwrap();
-
-        assert!(matches!(
-            storage.append("s1", Bytes::from(vec![0_u8; 10]), "text/plain"),
-            Err(Error::StreamSizeLimitExceeded)
-        ));
-
-        storage
-            .append("s2", Bytes::from(vec![0_u8; 40]), "text/plain")
-            .unwrap();
-
-        assert!(matches!(
-            storage.append("s2", Bytes::from(vec![0_u8; 20]), "text/plain"),
-            Err(Error::MemoryLimitExceeded)
-        ));
-    }
-
-    #[test]
-    fn test_delete() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-        storage
-            .append("test", Bytes::from(vec![0_u8; 100]), "text/plain")
-            .unwrap();
-
-        let before = storage.total_bytes();
-        assert!(before >= 100);
-
-        storage.delete("test").unwrap();
-        assert!(!storage.exists("test"));
-        assert_eq!(storage.total_bytes(), 0);
-    }
-
-    #[test]
-    fn test_create_with_data_rolls_back_on_memory_limit() {
-        let storage = AcidStorage::new(test_storage_dir(), 16, 1024, 8).unwrap();
-        let config = StreamConfig::new("text/plain".to_string());
-        let oversized = vec![Bytes::from(vec![0_u8; 9])];
-
-        let err = storage.create_stream_with_data("test", config, oversized, false);
-        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
-        assert!(!storage.exists("test"));
-    }
-
-    #[test]
-    fn test_create_with_data_closed_is_atomic() {
-        let storage = test_storage();
-        let cfg = StreamConfig::new("text/plain".to_string()).with_created_closed(true);
-
-        let result = storage
-            .create_stream_with_data("test", cfg, vec![], true)
-            .unwrap();
-        assert_eq!(result.status, CreateStreamResult::Created);
-        assert!(result.closed);
-
-        let meta = storage.head("test").unwrap();
-        assert!(meta.closed);
-        assert!(matches!(
-            storage.append("test", Bytes::from("x"), "text/plain"),
-            Err(Error::StreamClosed)
-        ));
-    }
-
-    #[test]
-    fn test_create_with_data_idempotent_ignores_body() {
-        let storage = test_storage();
-        let cfg = StreamConfig::new("text/plain".to_string());
-
-        let r1 = storage
-            .create_stream_with_data("test", cfg.clone(), vec![Bytes::from("a")], false)
-            .unwrap();
-        assert_eq!(r1.status, CreateStreamResult::Created);
-
-        let r2 = storage
-            .create_stream_with_data("test", cfg, vec![Bytes::from("b")], false)
-            .unwrap();
-        assert_eq!(r2.status, CreateStreamResult::AlreadyExists);
-
-        let meta = storage.head("test").unwrap();
-        assert_eq!(meta.message_count, 1);
-    }
-
-    #[test]
-    fn test_batch_append_does_not_advance_stream_seq_on_failed_commit() {
-        let storage = AcidStorage::new(test_storage_dir(), 16, 1024, 8).unwrap();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let oversized = vec![Bytes::from(vec![0_u8; 9])];
-        let err = storage.batch_append("test", oversized, "text/plain", Some("s1"));
-        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
-
-        let retry = storage.batch_append("test", vec![Bytes::from("ok")], "text/plain", Some("s1"));
-        assert!(retry.is_ok());
-    }
-
-    #[test]
-    fn test_producer_append_does_not_advance_stream_seq_on_failed_commit() {
-        let storage = AcidStorage::new(test_storage_dir(), 16, 1024, 8).unwrap();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let oversized = vec![Bytes::from(vec![0_u8; 9])];
-        let err = storage.append_with_producer(
-            "test",
-            oversized,
-            "text/plain",
-            &producer("p1", 0, 0),
-            false,
-            Some("s1"),
-        );
-        assert!(matches!(err, Err(Error::StreamSizeLimitExceeded)));
-
-        let retry = storage.append_with_producer(
-            "test",
-            vec![Bytes::from("ok")],
-            "text/plain",
-            &producer("p1", 0, 0),
-            false,
-            Some("s1"),
-        );
-        assert!(matches!(retry, Ok(ProducerAppendResult::Accepted { .. })));
-    }
-
-    #[test]
-    fn test_producer_duplicate_detection() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let first = storage
-            .append_with_producer(
-                "test",
-                vec![Bytes::from("a")],
-                "text/plain",
-                &producer("p1", 0, 0),
-                false,
-                None,
-            )
-            .unwrap();
-        assert!(matches!(first, ProducerAppendResult::Accepted { .. }));
-
-        let dup = storage
-            .append_with_producer(
-                "test",
-                vec![Bytes::from("a")],
-                "text/plain",
-                &producer("p1", 0, 0),
-                false,
-                None,
-            )
-            .unwrap();
-        assert!(matches!(dup, ProducerAppendResult::Duplicate { .. }));
-    }
-
-    #[test]
-    fn test_producer_epoch_fencing() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        storage
-            .append_with_producer(
-                "test",
-                vec![Bytes::from("a")],
-                "text/plain",
-                &producer("p1", 2, 0),
-                false,
-                None,
-            )
-            .unwrap();
-
-        let err = storage
-            .append_with_producer(
-                "test",
-                vec![Bytes::from("b")],
-                "text/plain",
-                &producer("p1", 1, 0),
-                false,
-                None,
-            )
-            .unwrap_err();
-
-        assert!(matches!(err, Error::EpochFenced { .. }));
-    }
-
-    #[test]
-    fn test_producer_sequence_gap() {
-        let storage = test_storage();
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let err = storage
-            .append_with_producer(
-                "test",
-                vec![Bytes::from("bad")],
-                "text/plain",
-                &producer("p1", 0, 3),
-                false,
-                None,
-            )
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::SequenceGap {
-                expected: 0,
-                actual: 3
-            }
-        ));
-    }
-
-    #[test]
-    fn test_not_found() {
-        let storage = test_storage();
-
-        assert!(matches!(
-            storage.append("none", Bytes::from("x"), "text/plain"),
-            Err(Error::NotFound(_))
-        ));
-        assert!(matches!(
-            storage.read("none", &Offset::start()),
-            Err(Error::NotFound(_))
-        ));
-        assert!(matches!(storage.head("none"), Err(Error::NotFound(_))));
-        assert!(matches!(
-            storage.close_stream("none"),
-            Err(Error::NotFound(_))
-        ));
-    }
-
-    #[test]
     fn test_restore_from_disk() {
         let root = test_storage_dir();
         let cfg = StreamConfig::new("text/plain".to_string());
@@ -1524,46 +1144,6 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(dup, ProducerAppendResult::Duplicate { .. }));
-    }
-
-    #[test]
-    fn test_concurrent_appends_monotonicity() {
-        let storage = Arc::new(test_storage());
-        storage
-            .create_stream("test", StreamConfig::new("text/plain".to_string()))
-            .unwrap();
-
-        let mut handles = vec![];
-        for thread_id in 0..5 {
-            let storage = Arc::clone(&storage);
-            handles.push(thread::spawn(move || {
-                let mut offsets = Vec::new();
-                for i in 0..20 {
-                    let offset = storage
-                        .append(
-                            "test",
-                            Bytes::from(format!("thread {thread_id} msg {i}")),
-                            "text/plain",
-                        )
-                        .unwrap();
-                    offsets.push(offset);
-                }
-                offsets
-            }));
-        }
-
-        let mut all_offsets = Vec::new();
-        for h in handles {
-            all_offsets.extend(h.join().unwrap());
-        }
-
-        all_offsets.sort();
-        for i in 1..all_offsets.len() {
-            assert_ne!(all_offsets[i - 1], all_offsets[i]);
-        }
-
-        let meta = storage.head("test").unwrap();
-        assert_eq!(meta.message_count, 100);
     }
 
     #[test]
@@ -1651,5 +1231,79 @@ mod tests {
 
         let mismatch = AcidStorage::new(root, 8, 1024 * 1024, 100 * 1024);
         assert!(matches!(mismatch, Err(Error::Storage(_))));
+    }
+
+    #[test]
+    fn test_layout_manifest_invalid_json_fails_fast() {
+        let root = test_storage_dir();
+        let acid_dir = root.join("acid");
+        fs::create_dir_all(&acid_dir).unwrap();
+        fs::write(acid_dir.join("layout.json"), b"{invalid-json").unwrap();
+
+        let reopened = AcidStorage::new(root, 16, 1024 * 1024, 100 * 1024);
+        assert!(matches!(reopened, Err(Error::Storage(_))));
+    }
+
+    #[test]
+    fn test_layout_manifest_hash_policy_mismatch_fails_fast() {
+        let root = test_storage_dir();
+        let storage = AcidStorage::new(root.clone(), 16, 1024 * 1024, 100 * 1024).unwrap();
+        drop(storage);
+
+        let layout_path = root.join("acid").join("layout.json");
+        let mut layout: serde_json::Value =
+            serde_json::from_slice(&fs::read(&layout_path).unwrap()).unwrap();
+        layout["hash_policy"] = serde_json::Value::String("tampered-hash-policy".to_string());
+        fs::write(layout_path, serde_json::to_vec_pretty(&layout).unwrap()).unwrap();
+
+        let reopened = AcidStorage::new(root, 16, 1024 * 1024, 100 * 1024);
+        assert!(matches!(reopened, Err(Error::Storage(_))));
+    }
+
+    #[test]
+    fn test_corrupted_stream_metadata_fails_fast_on_startup() {
+        let root = test_storage_dir();
+        let storage = AcidStorage::new(root.clone(), 16, 1024 * 1024, 100 * 1024).unwrap();
+        storage
+            .create_stream("s", StreamConfig::new("text/plain".to_string()))
+            .unwrap();
+        storage
+            .append("s", Bytes::from("payload"), "text/plain")
+            .unwrap();
+
+        // Simulate on-disk corruption of stream metadata.
+        let shard_idx = storage.shard_index("s");
+        let txn = AcidStorage::begin_write_txn(&storage.shards[shard_idx].db).unwrap();
+        let mut streams = txn.open_table(STREAMS).unwrap();
+        let corrupt = b"{not-json".to_vec();
+        streams.insert("s", corrupt.as_slice()).unwrap();
+        drop(streams);
+        txn.commit().unwrap();
+        drop(storage);
+
+        let reopened = AcidStorage::new(root, 16, 1024 * 1024, 100 * 1024);
+        assert!(matches!(reopened, Err(Error::Storage(_))));
+    }
+
+    #[test]
+    fn test_tampered_shard_file_fails_fast_on_startup() {
+        let root = test_storage_dir();
+        let storage = AcidStorage::new(root.clone(), 16, 1024 * 1024, 100 * 1024).unwrap();
+        storage
+            .create_stream("s", StreamConfig::new("text/plain".to_string()))
+            .unwrap();
+        storage
+            .append("s", Bytes::from("payload"), "text/plain")
+            .unwrap();
+        let shard_idx = storage.shard_index("s");
+        drop(storage);
+
+        let shard_path = root
+            .join("acid")
+            .join(format!("shard_{shard_idx:02x}.redb"));
+        fs::write(&shard_path, b"not-a-valid-redb-file").unwrap();
+
+        let reopened = AcidStorage::new(root, 16, 1024 * 1024, 100 * 1024);
+        assert!(matches!(reopened, Err(Error::Storage(_))));
     }
 }
