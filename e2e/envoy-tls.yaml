@@ -1,3 +1,6 @@
+# Envoy config with HTTPS upstream to the DS server.
+# Identical JWT/routing behaviour to envoy.yaml; the only difference is the
+# upstream cluster uses TLS with a custom test CA.
 static_resources:
   listeners:
     - name: listener_tls_upstream
@@ -12,6 +15,8 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: ingress_http_tls_upstream
                 codec_type: AUTO
+                # Disable stream idle timeout at connection manager level;
+                # per-route timeouts below handle SSE and long-poll.
                 stream_idle_timeout: 0s
                 route_config:
                   name: local_route
@@ -19,16 +24,22 @@ static_resources:
                     - name: backend
                       domains: ["*"]
                       routes:
+                        # Health check — no auth required
                         - match:
                             path: "/healthz"
                           route:
                             cluster: durable_streams_server_tls
                             timeout: 5s
+                        # All other routes — JWT required
                         - match:
                             prefix: "/"
                           route:
                             cluster: durable_streams_server_tls
+                            # Disable route timeout for SSE streaming
                             timeout: 0s
+                            # Longer than server's SSE idle close (60s) and
+                            # long-poll timeout (30s), so the server controls
+                            # connection lifecycle.
                             idle_timeout: 120s
                 http_filters:
                   - name: envoy.filters.http.jwt_authn
@@ -46,8 +57,10 @@ static_resources:
                             - header_name: X-JWT-Sub
                               claim_name: sub
                       rules:
+                        # Health check bypass
                         - match:
                             path: "/healthz"
+                        # All other routes require JWT
                         - match:
                             prefix: "/"
                           requires:
@@ -69,6 +82,8 @@ static_resources:
                     socket_address:
                       address: server
                       port_value: 4438
+      # Upstream TLS: Envoy connects to the DS server over HTTPS.
+      # Uses the test CA to validate the server certificate.
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
@@ -78,6 +93,8 @@ static_resources:
             validation_context:
               trusted_ca:
                 filename: /etc/envoy/upstream-ca.pem
+            # TLS 1.3 only — intentional for test fixtures. Production
+            # deployments may want to allow TLS 1.2 for client compatibility.
             tls_params:
               tls_minimum_protocol_version: TLSv1_3
               tls_maximum_protocol_version: TLSv1_3
