@@ -62,6 +62,10 @@ pub struct Config {
     pub data_dir: String,
     /// Number of shards for acid/redb storage mode.
     pub acid_shard_count: usize,
+    /// Optional TLS certificate path (PEM). Requires `tls_key_path`.
+    pub tls_cert_path: Option<String>,
+    /// Optional TLS private key path (PEM or PKCS#8). Requires `tls_cert_path`.
+    pub tls_key_path: Option<String>,
 }
 
 impl Config {
@@ -101,7 +105,34 @@ impl Config {
             storage_mode,
             data_dir: get("DATA_DIR").unwrap_or_else(|| "./data/streams".to_string()),
             acid_shard_count,
+            tls_cert_path: get("TLS_CERT_PATH"),
+            tls_key_path: get("TLS_KEY_PATH"),
         }
+    }
+
+    /// Validate configuration invariants before server startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string when config is internally inconsistent.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        match (&self.tls_cert_path, &self.tls_key_path) {
+            (Some(_), Some(_)) | (None, None) => Ok(()),
+            (Some(_), None) => Err(
+                "TLS_CERT_PATH is set but TLS_KEY_PATH is missing; both must be set together"
+                    .to_string(),
+            ),
+            (None, Some(_)) => Err(
+                "TLS_KEY_PATH is set but TLS_CERT_PATH is missing; both must be set together"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// True when direct TLS termination is enabled on this server.
+    #[must_use]
+    pub fn tls_enabled(&self) -> bool {
+        self.tls_cert_path.is_some() && self.tls_key_path.is_some()
     }
 
     fn parse_storage_mode(get: &impl Fn(&str) -> Option<String>) -> StorageMode {
@@ -172,6 +203,8 @@ impl Default for Config {
             storage_mode: StorageMode::Memory,
             data_dir: "./data/streams".to_string(),
             acid_shard_count: 16,
+            tls_cert_path: None,
+            tls_key_path: None,
         }
     }
 }
@@ -212,6 +245,8 @@ mod tests {
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.data_dir, "./data/streams");
         assert_eq!(config.acid_shard_count, 16);
+        assert_eq!(config.tls_cert_path, None);
+        assert_eq!(config.tls_key_path, None);
     }
 
     #[test]
@@ -226,6 +261,8 @@ mod tests {
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.data_dir, "./data/streams");
         assert_eq!(config.acid_shard_count, 16);
+        assert_eq!(config.tls_cert_path, None);
+        assert_eq!(config.tls_key_path, None);
     }
 
     #[test]
@@ -240,6 +277,8 @@ mod tests {
             ("STORAGE_MODE", "file-fast"),
             ("DATA_DIR", "/tmp/ds-store"),
             ("ACID_SHARD_COUNT", "32"),
+            ("TLS_CERT_PATH", "/tmp/cert.pem"),
+            ("TLS_KEY_PATH", "/tmp/key.pem"),
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.port, 8080);
@@ -251,6 +290,8 @@ mod tests {
         assert_eq!(config.storage_mode, StorageMode::FileFast);
         assert_eq!(config.data_dir, "/tmp/ds-store");
         assert_eq!(config.acid_shard_count, 32);
+        assert_eq!(config.tls_cert_path.as_deref(), Some("/tmp/cert.pem"));
+        assert_eq!(config.tls_key_path.as_deref(), Some("/tmp/key.pem"));
     }
 
     #[test]
@@ -271,6 +312,8 @@ mod tests {
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.acid_shard_count, 16);
+        assert_eq!(config.tls_cert_path, None);
+        assert_eq!(config.tls_key_path, None);
     }
 
     #[test]
@@ -286,6 +329,8 @@ mod tests {
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.acid_shard_count, 16);
+        assert_eq!(config.tls_cert_path, None);
+        assert_eq!(config.tls_key_path, None);
     }
 
     #[test]
@@ -306,6 +351,31 @@ mod tests {
         assert_eq!(via_env.storage_mode, via_lookup.storage_mode);
         assert_eq!(via_env.data_dir, via_lookup.data_dir);
         assert_eq!(via_env.acid_shard_count, via_lookup.acid_shard_count);
+        assert_eq!(via_env.tls_cert_path, via_lookup.tls_cert_path);
+        assert_eq!(via_env.tls_key_path, via_lookup.tls_key_path);
+    }
+
+    #[test]
+    fn test_validate_tls_pair_ok_when_both_absent_or_present() {
+        let mut config = Config::default();
+        assert!(config.validate().is_ok());
+        assert!(!config.tls_enabled());
+
+        config.tls_cert_path = Some("/tmp/cert.pem".to_string());
+        config.tls_key_path = Some("/tmp/key.pem".to_string());
+        assert!(config.validate().is_ok());
+        assert!(config.tls_enabled());
+    }
+
+    #[test]
+    fn test_validate_tls_pair_rejects_partial_configuration() {
+        let mut config = Config::default();
+        config.tls_cert_path = Some("/tmp/cert.pem".to_string());
+        assert!(config.validate().is_err());
+
+        config.tls_cert_path = None;
+        config.tls_key_path = Some("/tmp/key.pem".to_string());
+        assert!(config.validate().is_err());
     }
 
     #[test]
