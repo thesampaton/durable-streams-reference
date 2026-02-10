@@ -80,6 +80,9 @@ jobs:
       - name: Run integration tests
         run: cargo test --test '*'
 
+      - name: Run backend HTTP parity subset (memory + acid)
+        run: cargo test --test http_backend_parity_subset
+
   governance:
     name: Governance Check
     runs-on: ubuntu-latest
