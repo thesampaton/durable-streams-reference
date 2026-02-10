@@ -1,3 +1,4 @@
+pub mod acid;
 pub mod file;
 pub mod memory;
 
