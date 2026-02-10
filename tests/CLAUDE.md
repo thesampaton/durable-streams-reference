@@ -29,6 +29,20 @@ scaffolding. The external conformance suite is the ultimate acceptance gate.
   - Append data, read back, verify offset resumption
   - Long-poll timeout behaviour
 
+### Backend parity policy
+
+- Shared backend invariants belong in `tests/storage_backend_contract.rs`.
+- The contract suite runs the same direct-storage assertions against
+  `memory`, `file-durable`, and `acid`.
+- Backend-specific storage tests stay in source files:
+  - `src/storage/memory.rs`: in-memory concurrency specifics only.
+  - `src/storage/file.rs`: filesystem/log recovery specifics only.
+  - `src/storage/acid.rs`: shard/layout/corruption fail-fast specifics only.
+- HTTP parity-critical coverage across backends belongs in
+  `tests/http_backend_parity_subset.rs` and currently targets `memory` + `acid`.
+- Keep assertions backend-neutral in shared suites; do not assert internals
+  (file paths, shard IDs, lock shapes) outside backend-specific tests.
+
 ### External Conformance Suite (ultimate gate)
 
 - `@durable-streams/server-conformance-tests` on npm (~195 tests).
@@ -74,6 +88,11 @@ Common test utilities:
 - `shutdown_server(server: Server)` — clean shutdown
 
 Keep helpers focused. Don't build a framework. Just reduce duplication.
+
+Backend-aware helpers:
+- `create_test_storage(...)` and `create_test_storage_with_limits(...)` for
+  direct storage-contract tests.
+- `spawn_test_server_for_backend(...)` for HTTP parity subsets.
 
 ## Test Naming
 
