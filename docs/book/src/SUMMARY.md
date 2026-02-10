@@ -44,5 +44,6 @@
 
 - [Governance](project/governance.md)
 - [Decisions](project/decisions.md)
+- [Benchmarks](project/benchmarks.md)
 - [Spec gaps](project/gaps.md)
 - [Contributing](project/contributing.md)
