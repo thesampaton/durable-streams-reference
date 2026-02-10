@@ -6,7 +6,7 @@ The durable streams server is the core component. It implements the [durable str
 
 - **Protocol-only.** The server implements the protocol and nothing else. No authentication, no database, no application logic. This makes it composable with external infrastructure.
 - **Thin handlers.** HTTP handlers parse requests, validate inputs, call the storage layer, and format responses. No business logic in handlers.
-- **In-memory storage.** Streams are held in memory with per-stream read-write locks. Fast and simple, but data does not survive restarts. Use the sync layer for durability.
+- **Pluggable storage.** Streams can run in `memory`, `file-fast` / `file-durable`, or `acid` mode. `acid` uses sharded redb files for crash-safe ACID commits.
 - **Content-agnostic.** The server treats all payloads as opaque bytes (or opaque JSON objects for JSON-mode streams). It does not parse or interpret message content.
 
 ## What it does
@@ -36,6 +36,17 @@ Key defaults:
 | `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout |
 | `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 to disable) |
 | `CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `STORAGE_MODE` | `memory` | Storage backend selection |
+| `DATA_DIR` | `./data/streams` | Persistent backend root directory |
+
+## Storage backends
+
+- `memory`: fastest and simplest, no restart durability.
+- `file-fast` / `file-durable`: one file per stream append log; durable mode fsyncs each append.
+- `acid`: sharded redb backend in `${DATA_DIR}/acid`.
+  - Routing is deterministic: `shard = seahash(stream_name) & (shard_count - 1)`.
+  - Each shard has an independent redb write lock, so different streams can write concurrently on different shards.
+  - Every mutating operation is one redb transaction with immediate durability, providing crash-safe all-or-nothing commits.
 
 ## Security headers
 
