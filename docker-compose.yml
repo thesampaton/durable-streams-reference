@@ -4,7 +4,7 @@ services:
     environment:
       PORT: "4437"
       LONG_POLL_TIMEOUT_SECS: "30"
-      SSE_IDLE_CLOSE_SECS: "60"
+      SSE_RECONNECT_INTERVAL_SECS: "60"
       RUST_LOG: "info"
     ports:
       - "4437:4437"

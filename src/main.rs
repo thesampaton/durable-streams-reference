@@ -32,12 +32,12 @@ async fn main() {
         let sync_on_append = config.storage_mode.sync_on_append();
         tracing::info!(
             "File storage dir: {}, sync on append: {}",
-            config.storage_dir,
+            config.data_dir,
             sync_on_append
         );
         let storage = Arc::new(
             FileStorage::new(
-                &config.storage_dir,
+                &config.data_dir,
                 config.max_memory_bytes,
                 config.max_stream_bytes,
                 sync_on_append,

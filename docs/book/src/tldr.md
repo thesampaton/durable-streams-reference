@@ -66,7 +66,7 @@ Adminer at `http://localhost:8081` (server: postgres, user: postgres, pw: passwo
 |----------|---------|-------------|
 | `PORT` | `4437` | Listen port |
 | `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll wait |
-| `SSE_IDLE_CLOSE_SECS` | `60` | SSE idle close (0 = off) |
+| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 = off) |
 | `CORS_ORIGINS` | `*` | Allowed origins |
 | `MAX_MEMORY_BYTES` | `104857600` | Total memory cap |
 | `MAX_STREAM_BYTES` | `10485760` | Per-stream cap |
