@@ -18,8 +18,8 @@ snapshot from a full 3-run matrix.
 Variants:
 
 - `rust-memory`
-- `rust-file` (`STORAGE_MODE=file-durable`)
-- `rust-acid` (`STORAGE_MODE=acid`)
+- `rust-file` (`DS_STORAGE__MODE=file-durable`)
+- `rust-acid` (`DS_STORAGE__MODE=acid`)
 - `node-memory`
 - `node-file`
 - `caddy-memory`

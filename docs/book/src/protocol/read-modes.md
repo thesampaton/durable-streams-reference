@@ -36,7 +36,7 @@ Behavior:
 - If at the tail and the stream is closed, returns immediately with `Stream-Closed: true`
 - Returns `204 No Content` when the timeout expires with no new data
 
-The timeout defaults to 30 seconds (configurable via `LONG_POLL_TIMEOUT_SECS`).
+The timeout defaults to 30 seconds (configurable via `DS_SERVER__LONG_POLL_TIMEOUT_SECS`).
 
 The response includes a `Stream-Cursor` header. Echo it back in the `cursor` query parameter on subsequent requests to enable CDN request collapsing:
 
@@ -88,7 +88,7 @@ data:{"streamNextOffset":"...","streamCursor":"...","upToDate":true}
 3. The connection stays open, waiting for new data
 4. New appends trigger additional `data` + `control` events
 5. If the stream is closed, the final `control` includes `streamClosed: true` and the connection closes
-6. Idle connections close after ~60 seconds (configurable via `SSE_RECONNECT_INTERVAL_SECS`)
+6. Idle connections close after ~60 seconds (configurable via `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS`)
 
 ### Binary streams
 

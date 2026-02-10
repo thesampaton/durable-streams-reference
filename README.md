@@ -66,7 +66,7 @@ This implementation targets full conformance with [`@durable-streams/server-conf
 Run conformance tests locally:
 
 ```bash
-LONG_POLL_TIMEOUT_SECS=2 SSE_RECONNECT_INTERVAL_SECS=5 cargo run &
+DS_SERVER__LONG_POLL_TIMEOUT_SECS=2 DS_SERVER__SSE_RECONNECT_INTERVAL_SECS=5 cargo run &
 
 cd /tmp/conformance-run
 npm init -y
@@ -81,14 +81,39 @@ CONFORMANCE_TEST_URL=http://localhost:4437 npx vitest run conformance.test.mjs
 
 ## Configuration
 
+The server now supports layered TOML config with env overrides.
+
+Load order (later wins):
+1. built-in defaults
+2. `config/default.toml` (if present)
+3. `config/<profile>.toml` (if present, via `--profile`)
+4. `config/local.toml` (if present; gitignored)
+5. extra file from `--config <path>`
+6. environment variables
+
+CLI:
+
+```bash
+# Uses config/default.toml + config/dev.toml (+ config/local.toml if present)
+cargo run -- --profile dev
+
+# Add an extra override file on top
+cargo run -- --profile prod --config /etc/durable-streams/override.toml
+```
+
+Environment variables use `DS_` prefix with double-underscore section separators:
+
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `4437` | Server listen port |
-| `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout in seconds |
-| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (matches Caddy's `sse_reconnect_interval`) |
-| `STORAGE_MODE` | `memory` | Storage backend: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`) |
-| `DATA_DIR` | `./data/streams` | Root directory for file/acid persistent storage |
-| `ACID_SHARD_COUNT` | `16` | Number of redb shards for `STORAGE_MODE=acid` (power-of-2, `1..=256`) |
-| `TLS_CERT_PATH` | _(unset)_ | Optional PEM certificate path for direct TLS termination (requires `TLS_KEY_PATH`) |
-| `TLS_KEY_PATH` | _(unset)_ | Optional PEM/PKCS#8 key path for direct TLS termination (requires `TLS_CERT_PATH`) |
-| `RUST_LOG` | `info` | Log level filter |
+| `DS_SERVER__PORT` | `4437` | Server listen port |
+| `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout in seconds |
+| `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval |
+| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `DS_LIMITS__MAX_MEMORY_BYTES` | `104857600` | Global in-memory cap |
+| `DS_LIMITS__MAX_STREAM_BYTES` | `10485760` | Per-stream byte cap |
+| `DS_STORAGE__MODE` | `memory` | Storage backend: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`) |
+| `DS_STORAGE__DATA_DIR` | `./data/streams` | Root directory for file/acid persistent storage |
+| `DS_STORAGE__ACID_SHARD_COUNT` | `16` | Number of redb shards for acid mode (power-of-2, `1..=256`) |
+| `DS_TLS__CERT_PATH` | _(unset)_ | Optional PEM certificate path for direct TLS termination (requires `DS_TLS__KEY_PATH`) |
+| `DS_TLS__KEY_PATH` | _(unset)_ | Optional PEM/PKCS#8 key path for direct TLS termination (requires `DS_TLS__CERT_PATH`) |
+| `RUST_LOG` | `info` | Log level filter (standard tracing env var) |

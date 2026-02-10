@@ -91,7 +91,7 @@ Ambiguity log:
 
 | Ambiguity | Interpretation | Why Conservative | Clarifying Test |
 |-----------|----------------|------------------|-----------------|
-| CORS not covered by conformance | Allow all origins by default, configurable via `CORS_ORIGINS` | Aligns with typical development defaults, restrictable in production | Test OPTIONS preflight with various origin headers |
+| CORS not covered by conformance | Allow all origins by default, configurable via `DS_SERVER__CORS_ORIGINS` | Aligns with typical development defaults, restrictable in production | Test OPTIONS preflight with various origin headers |
 
 ### `docs/ecosystem-interop.md`
 

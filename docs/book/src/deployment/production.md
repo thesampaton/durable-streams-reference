@@ -23,8 +23,8 @@ For production durability, use `file-durable` or `acid`, or run the sync layer t
 
 ### Acid mode tuning
 
-- `STORAGE_MODE=acid` and `DATA_DIR=/path/to/store` persist under `${DATA_DIR}/acid/`.
-- `ACID_SHARD_COUNT` controls write concurrency. Keep it power-of-2 (`1..=256`), default `16`.
+- `DS_STORAGE__MODE=acid` and `DS_STORAGE__DATA_DIR=/path/to/store` persist under `${DATA_DIR}/acid/`.
+- `DS_STORAGE__ACID_SHARD_COUNT` controls write concurrency. Keep it power-of-2 (`1..=256`), default `16`.
 - Writes are serialized per shard (single writer per shard). Increase shard count for highly concurrent write workloads.
 - Acid mode commits with immediate durability (fsync-class semantics on each commit), prioritizing crash safety over raw append latency.
 
@@ -48,8 +48,8 @@ Tune the server's memory limits for your workload:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `MAX_MEMORY_BYTES` | 100 MB | Total across all streams |
-| `MAX_STREAM_BYTES` | 10 MB | Per stream |
+| `DS_LIMITS__MAX_MEMORY_BYTES` | 100 MB | Total across all streams |
+| `DS_LIMITS__MAX_STREAM_BYTES` | 10 MB | Per stream |
 
 In production with the sync layer, streams are consumed and can be deleted after sync. The in-memory store acts as a buffer, not long-term storage.
 
@@ -62,10 +62,10 @@ In production with the sync layer, streams are consumed and can be deleted after
 
 ## CORS
 
-The server defaults to `CORS_ORIGINS=*` (allow all). For production, restrict to your application's domain:
+The server defaults to `DS_SERVER__CORS_ORIGINS=*` (allow all). For production, restrict to your application's domain:
 
 ```bash
-CORS_ORIGINS=https://app.example.com cargo run
+DS_SERVER__CORS_ORIGINS=https://app.example.com cargo run
 ```
 
 Multiple origins can be comma-separated.
@@ -74,7 +74,7 @@ Multiple origins can be comma-separated.
 
 Default model: terminate TLS at the proxy layer (Envoy, nginx, cloud load balancer) or at a CDN edge.
 
-Optional model: the DS server can terminate TLS directly when both `TLS_CERT_PATH` and `TLS_KEY_PATH` are set.
+Optional model: the DS server can terminate TLS directly when both `DS_TLS__CERT_PATH` and `DS_TLS__KEY_PATH` are set.
 
 Recommended topology matrix:
 
