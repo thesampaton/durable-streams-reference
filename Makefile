@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
+.PHONY: build release lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-merge pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
 .NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file
 
 # Default target
@@ -28,6 +28,10 @@ help:
 	@echo "  benchmark-caddy       - Run benchmark-caddy-memory then benchmark-caddy-file"
 	@echo "  benchmark-caddy-memory - Run benchmark suite against Caddy plugin (memory)"
 	@echo "  benchmark-caddy-file  - Run benchmark suite against Caddy plugin (file)"
+	@echo "  pgo-train             - Generate fresh PGO profiles using memory+file benchmarks"
+	@echo "  pgo-merge             - Merge raw PGO profiles into a .profdata file"
+	@echo "  pgo-build             - Build release binary with merged PGO profile"
+	@echo "  pgo-benchmark         - Benchmark with profile-use build flags enabled"
 	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
@@ -134,6 +138,16 @@ $(BENCHMARK_DIR)/package.json:
 	printf 'import { runBenchmarks } from "@durable-streams/benchmarks";\nconst baseUrl = process.env.BENCHMARK_URL;\nif (!baseUrl) throw new Error("BENCHMARK_URL is required");\nrunBenchmarks({ baseUrl, environment: process.env.BENCHMARK_ENV || "local" });\n' > $(BENCHMARK_DIR)/benchmark.bench.mjs
 
 BENCH_SCRIPT := scripts/run_benchmark.sh
+RUST_HOST_TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
+RUST_SYSROOT := $(shell rustc --print sysroot)
+LLVM_BIN_DIR := $(RUST_SYSROOT)/lib/rustlib/$(RUST_HOST_TRIPLE)/bin
+LLVM_PROFDATA ?= $(LLVM_BIN_DIR)/llvm-profdata
+PGO_DIR ?= /tmp/ds-pgo
+PGO_PROFILE_DIR := $(PGO_DIR)/profiles
+PGO_PROFILE_DATA := $(PGO_DIR)/merged.profdata
+PGO_RUSTFLAGS_GEN := -Cprofile-generate=$(PGO_PROFILE_DIR)
+PGO_WARN_MISSING ?= false
+PGO_RUSTFLAGS_USE := -Cprofile-use=$(PGO_PROFILE_DATA) -Cllvm-args=-pgo-warn-missing-function=$(PGO_WARN_MISSING)
 
 benchmark: benchmark-memory benchmark-file
 	@echo ""
@@ -151,6 +165,58 @@ benchmark-file: release $(BENCHMARK_DIR)/node_modules
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "file (durable)" localhost $(BENCHMARK_PORT) /healthz file \
 		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
+
+pgo-clean:
+	@rm -rf $(PGO_DIR)
+
+pgo-train: pgo-clean pgo-train-memory pgo-train-file pgo-merge
+	@echo ""
+	@echo "PGO profiles ready:"
+	@echo "  raw profiles: $(PGO_PROFILE_DIR)"
+	@echo "  merged:       $(PGO_PROFILE_DATA)"
+
+pgo-train-memory: $(BENCHMARK_DIR)/node_modules
+	@mkdir -p $(PGO_PROFILE_DIR)
+	@RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" cargo build --release $(CARGO_FEATURES)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "memory (pgo-generate)" localhost $(BENCHMARK_PORT) /healthz pgo-train-memory \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=memory cargo run --release $(CARGO_FEATURES)
+
+pgo-train-file: $(BENCHMARK_DIR)/node_modules
+	@mkdir -p $(PGO_PROFILE_DIR)
+	@rm -rf $(BENCHMARK_FILE_STORAGE_DIR)
+	@RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" cargo build --release $(CARGO_FEATURES)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "file (pgo-generate)" localhost $(BENCHMARK_PORT) /healthz pgo-train-file \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
+
+pgo-merge:
+	@test -x "$(LLVM_PROFDATA)" || (echo "Missing llvm-profdata at $(LLVM_PROFDATA)" && exit 1)
+	@test -n "$$(find $(PGO_PROFILE_DIR) -name '*.profraw' -print -quit)" || (echo "No .profraw files found under $(PGO_PROFILE_DIR). Run 'make pgo-train' first." && exit 1)
+	@mkdir -p $(PGO_DIR)
+	@$(LLVM_PROFDATA) merge -o $(PGO_PROFILE_DATA) $(PGO_PROFILE_DIR)/*.profraw
+	@echo "Merged profile data written to $(PGO_PROFILE_DATA)"
+
+pgo-build: pgo-merge
+	@RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" cargo build --release $(CARGO_FEATURES)
+	@echo "Built release binary with PGO profile-use flags"
+
+pgo-benchmark: pgo-benchmark-memory pgo-benchmark-file
+	@echo ""
+	@echo "PGO benchmark comparison files:"
+	@echo "  $(BENCHMARK_DIR)/benchmark-results-pgo-memory.json"
+	@echo "  $(BENCHMARK_DIR)/benchmark-results-pgo-file.json"
+
+pgo-benchmark-memory: pgo-build $(BENCHMARK_DIR)/node_modules
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "memory (pgo-use)" localhost $(BENCHMARK_PORT) /healthz pgo-memory \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=memory cargo run --release $(CARGO_FEATURES)
+
+pgo-benchmark-file: pgo-build $(BENCHMARK_DIR)/node_modules
+	@rm -rf $(BENCHMARK_FILE_STORAGE_DIR)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "file (pgo-use)" localhost $(BENCHMARK_PORT) /healthz pgo-file \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable STORAGE_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
 
 benchmark-node: benchmark-node-memory benchmark-node-file
 	@echo ""
