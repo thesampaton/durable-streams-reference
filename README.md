@@ -74,4 +74,7 @@ CONFORMANCE_TEST_URL=http://localhost:4437 npx vitest run conformance.test.mjs
 | `PORT` | `4437` | Server listen port |
 | `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout in seconds |
 | `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (matches Caddy's `sse_reconnect_interval`) |
+| `STORAGE_MODE` | `memory` | Storage backend: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`) |
+| `DATA_DIR` | `./data/streams` | Root directory for file/acid persistent storage |
+| `ACID_SHARD_COUNT` | `16` | Number of redb shards for `STORAGE_MODE=acid` (power-of-2, `1..=256`) |
 | `RUST_LOG` | `info` | Log level filter |

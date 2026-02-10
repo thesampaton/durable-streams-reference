@@ -10,6 +10,8 @@ Ambiguities and edge cases not fully covered by the protocol spec or conformance
 
 Gaps are not failures. They are explicit acknowledgments that the implementation operates beyond the spec's current coverage.
 
+Non-protocol architecture and operational decisions are tracked in [`docs/decisions.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/decisions.md).
+
 ## Ecosystem interop observations
 
 These are recorded in [`docs/ecosystem-interop.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/ecosystem-interop.md). They are not protocol gaps -- the protocol is fine. They are rough edges in ecosystem components that developers encounter during integration.

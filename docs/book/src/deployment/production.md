@@ -13,10 +13,20 @@ The DS server itself needs no changes. It is auth-agnostic by design.
 
 ## Persistent storage
 
-The DS server stores streams in memory. For durability:
+The DS server supports multiple storage modes:
 
-- **With the sync layer:** The Stream-to-PG direction already writes events into Postgres. On server restart, the sync service would need to resume from a saved offset (not yet implemented in the reference sync service).
-- **Alternative:** Implement a persistent storage backend (Redis, SQLite, Postgres) behind the `Storage` trait. The server's storage layer is pluggable.
+- `memory`: in-RAM only; no restart durability.
+- `file-fast` / `file-durable`: file-backed per-stream logs.
+- `acid`: sharded redb backend with ACID commits and immediate durability.
+
+For production durability, use `file-durable` or `acid`, or run the sync layer to mirror data into Postgres.
+
+### Acid mode tuning
+
+- `STORAGE_MODE=acid` and `DATA_DIR=/path/to/store` persist under `${DATA_DIR}/acid/`.
+- `ACID_SHARD_COUNT` controls write concurrency. Keep it power-of-2 (`1..=256`), default `16`.
+- Writes are serialized per shard (single writer per shard). Increase shard count for highly concurrent write workloads.
+- Acid mode commits with immediate durability (fsync-class semantics on each commit), prioritizing crash safety over raw append latency.
 
 ## Electric SQL configuration
 

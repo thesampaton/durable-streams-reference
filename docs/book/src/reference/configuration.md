@@ -23,6 +23,14 @@ The DS server is configured entirely through environment variables. All have sen
 | `MAX_MEMORY_BYTES` | `104857600` (100 MB) | Maximum total memory across all streams. Appends exceeding this return `413 Payload Too Large`. |
 | `MAX_STREAM_BYTES` | `10485760` (10 MB) | Maximum bytes per individual stream. |
 
+## Storage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_MODE` | `memory` | Storage backend mode: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`). |
+| `DATA_DIR` | `./data/streams` | Root directory for persistent backends (`file-*`, `acid`). |
+| `ACID_SHARD_COUNT` | `16` | Number of redb shards when `STORAGE_MODE=acid`; must be power-of-2 in `1..=256` (invalid values fall back to `16`). |
+
 ## CORS
 
 | Variable | Default | Description |
