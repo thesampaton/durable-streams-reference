@@ -34,7 +34,6 @@ impl StorageMode {
     pub fn sync_on_append(self) -> bool {
         matches!(self, Self::FileDurable)
     }
-
 }
 
 /// Server configuration
