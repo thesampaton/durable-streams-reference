@@ -72,4 +72,14 @@ Multiple origins can be comma-separated.
 
 ## TLS
 
-The DS server does not terminate TLS. In production, terminate TLS at the proxy layer (Envoy, nginx, cloud load balancer) or at a CDN edge.
+Default model: terminate TLS at the proxy layer (Envoy, nginx, cloud load balancer) or at a CDN edge.
+
+Optional model: the DS server can terminate TLS directly when both `TLS_CERT_PATH` and `TLS_KEY_PATH` are set.
+
+Recommended topology matrix:
+
+- **Internet-facing traffic:** terminate TLS at proxy/edge (this is still the default).
+- **Proxy -> DS server hop:** use direct TLS on the DS server when you need encrypted in-cluster/intra-box traffic.
+- **mTLS:** terminate and enforce mTLS at the proxy when possible; DS direct TLS currently covers server-side TLS termination.
+
+HTTP/2 and HTTP/3 are typically negotiated at the proxy/edge. Enabling direct TLS on the DS server secures that hop, while proxy capabilities still govern external ALPN behavior.

@@ -102,7 +102,7 @@ CREATE TABLE session_events (
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ELECTRIC_URL` | `http://electric:3000` | Electric Shape API |
-| `DS_SERVER_URL` | `http://server:4437` | DS server (internal, no auth) |
+| `DS_SERVER_URL` | `http://server:4437` | DS server URL (internal, no auth). Use `https://...` when direct TLS is enabled on the DS server. |
 | `POSTGRES_URL` | `postgresql://postgres:password@postgres:5432/durable_streams` | Postgres connection |
 
 ### Running
