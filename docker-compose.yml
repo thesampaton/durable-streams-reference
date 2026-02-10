@@ -9,6 +9,24 @@ services:
     ports:
       - "4437:4437"
 
+  server-tls:
+    build: .
+    environment:
+      PORT: "4438"
+      LONG_POLL_TIMEOUT_SECS: "30"
+      SSE_RECONNECT_INTERVAL_SECS: "60"
+      RUST_LOG: "info"
+      TLS_CERT_PATH: "/etc/ds/tls/server-cert.pem"
+      TLS_KEY_PATH: "/etc/ds/tls/server-key.pem"
+    volumes:
+      - ./e2e/fixtures/ds-server-cert.pem:/etc/ds/tls/server-cert.pem:ro
+      - ./e2e/fixtures/ds-server-key.pem:/etc/ds/tls/server-key.pem:ro
+    networks:
+      default:
+        aliases:
+          - server
+    profiles: ["tls"]
+
   envoy:
     image: envoyproxy/envoy:v1.31-latest
     ports:
@@ -19,6 +37,19 @@ services:
       - ./e2e/fixtures/jwks.json:/etc/envoy/jwks.json:ro
     depends_on:
       - server
+
+  envoy-tls:
+    image: envoyproxy/envoy:v1.31-latest
+    ports:
+      - "8082:8080"
+      - "9902:9901"
+    volumes:
+      - ./e2e/envoy-tls.yaml:/etc/envoy/envoy.yaml:ro
+      - ./e2e/fixtures/jwks.json:/etc/envoy/jwks.json:ro
+      - ./e2e/fixtures/ds-ca-cert.pem:/etc/envoy/upstream-ca.pem:ro
+    depends_on:
+      - server-tls
+    profiles: ["tls"]
 
   postgres:
     image: postgres:17-alpine
@@ -43,7 +74,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    profiles: ["sync"]
+    profiles: ["sync", "tls"]
 
   electric:
     image: electricsql/electric:1.4.2
@@ -58,7 +89,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    profiles: ["sync"]
+    profiles: ["sync", "tls"]
 
   sync-service:
     build: ./e2e/sync
@@ -72,6 +103,22 @@ services:
       server:
         condition: service_started
     profiles: ["sync"]
+
+  sync-service-tls:
+    build: ./e2e/sync
+    environment:
+      ELECTRIC_URL: http://electric:3000
+      DS_SERVER_URL: https://server:4438
+      POSTGRES_URL: postgresql://postgres:password@postgres:5432/durable_streams
+      NODE_EXTRA_CA_CERTS: /etc/ssl/ds/ds-ca-cert.pem
+    volumes:
+      - ./e2e/fixtures/ds-ca-cert.pem:/etc/ssl/ds/ds-ca-cert.pem:ro
+    depends_on:
+      electric:
+        condition: service_healthy
+      server-tls:
+        condition: service_started
+    profiles: ["tls"]
 
   adminer:
     image: adminer:4

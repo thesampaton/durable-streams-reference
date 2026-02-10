@@ -27,9 +27,13 @@ Durable Streams Server (:4437, internal only)
 | Path | Purpose |
 |------|---------|
 | `envoy.yaml` | Envoy proxy config — JWT validation, route timeouts, health bypass |
+| `envoy-tls.yaml` | Envoy proxy config with HTTPS upstream to DS server |
 | `fixtures/test-key.pem` | RSA 2048 private key (test-only, zero security value) |
 | `fixtures/test-key.pub.pem` | RSA public key |
 | `fixtures/jwks.json` | JWKS document served to Envoy for JWT verification |
+| `fixtures/ds-ca-cert.pem` | Test CA certificate used to validate DS TLS server cert |
+| `fixtures/ds-server-cert.pem` | DS server test certificate for TLS upstream scenarios |
+| `fixtures/ds-server-key.pem` | DS server test private key for TLS upstream scenarios |
 | `generate-token.mjs` | CLI wrapper for minting test JWTs |
 | `test-utils.mjs` | Importable `generateToken()` for programmatic JWT creation |
 | `integration.test.mjs` | Vitest e2e test suite (8 scenarios) |
@@ -111,9 +115,15 @@ Eight e2e test scenarios validate the full authenticated stack using
 # Fully automated (builds Docker, starts stack, runs tests, tears down)
 make integration-test
 
+# Same suite, but Envoy -> DS uses HTTPS upstream
+make integration-test-tls
+
 # Manual (stack already running via docker-compose up -d)
 cd e2e && npm install
 E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose integration.test.mjs
+
+# Manual against TLS-upstream stack
+E2E_BASE_URL=http://localhost:8082 npx vitest run --reporter=verbose integration.test.mjs
 ```
 
 The `E2E_BASE_URL` env var defaults to `http://localhost:8080`.
@@ -171,9 +181,15 @@ as-is between DS streams and Postgres. A typical STATE-PROTOCOL event:
 # Fully automated (builds all containers, starts full stack, runs tests, tears down)
 make integration-test-sessions
 
+# Full sessions/sync stack with TLS for Envoy->DS and sync-service->DS hops
+make integration-test-sessions-tls
+
 # Manual (stack already running)
 cd e2e && npm install
 E2E_BASE_URL=http://localhost:8080 npx vitest run --reporter=verbose sessions.test.mjs
+
+# Manual against TLS-upstream stack
+E2E_BASE_URL=http://localhost:8082 npx vitest run --reporter=verbose sessions.test.mjs
 ```
 
 ### Test scenarios

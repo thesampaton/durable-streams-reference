@@ -1,4 +1,4 @@
-.PHONY: build release release-pgo lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-acid benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-train-acid pgo-merge pgo-verify pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file pgo-benchmark-acid integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
+.PHONY: build release release-pgo lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-acid benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-train-acid pgo-merge pgo-verify pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file pgo-benchmark-acid integration-test integration-test-tls integration-test-sessions integration-test-sessions-tls integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
 .NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-acid benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file pgo-train-acid pgo-benchmark-acid
 
 # Default target
@@ -39,7 +39,9 @@ help:
 	@echo "  pgo-benchmark-acid    - Benchmark acid mode with profile-use build flags enabled"
 	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
+	@echo "  integration-test-tls  - Run auth-proxy integration test with Envoy -> DS HTTPS upstream"
 	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
+	@echo "  integration-test-sessions-tls - Run sessions + DB sync test with TLS DS upstream"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker                - Build Docker image"
@@ -329,7 +331,7 @@ integration-test: docker
 	@docker-compose up -d; \
 	echo "Waiting for health check..."; \
 	for i in $$(seq 1 30); do \
-	  curl -s http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
+	  curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
 	done; \
 	echo "Running integration tests..."; \
 	cd e2e && npm install && npx vitest run --reporter=verbose integration.test.mjs; \
@@ -338,12 +340,26 @@ integration-test: docker
 	docker-compose down; \
 	exit $$RESULT
 
+integration-test-tls: docker
+	@echo "Starting TLS integration stack (Envoy -> DS HTTPS upstream)..."
+	@docker-compose --profile tls up -d --build server-tls envoy-tls; \
+	echo "Waiting for TLS-stack health check..."; \
+	for i in $$(seq 1 60); do \
+	  curl -fsS http://localhost:8082/healthz > /dev/null 2>&1 && break; sleep 1; \
+	done; \
+	echo "Running integration tests against TLS upstream stack..."; \
+	cd e2e && npm install && E2E_BASE_URL=http://localhost:8082 npx vitest run --reporter=verbose integration.test.mjs; \
+	RESULT=$$?; \
+	echo "Stopping TLS stack..."; \
+	docker-compose --profile tls down; \
+	exit $$RESULT
+
 integration-test-sessions:
 	@echo "Starting sessions + sync stack..."
 	@docker-compose --profile sync up -d --build; \
 	echo "Waiting for Envoy health check..."; \
 	for i in $$(seq 1 60); do \
-	  curl -s http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
+	  curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; \
 	done; \
 	echo "Waiting for sync service readiness..."; \
 	for i in $$(seq 1 30); do \
@@ -354,6 +370,24 @@ integration-test-sessions:
 	RESULT=$$?; \
 	echo "Stopping stack..."; \
 	docker-compose --profile sync down; \
+	exit $$RESULT
+
+integration-test-sessions-tls:
+	@echo "Starting sessions + sync stack with TLS DS upstream..."
+	@docker-compose --profile sync --profile tls up -d --build postgres electric server-tls envoy-tls sync-service-tls; \
+	echo "Waiting for Envoy (TLS-upstream) health check..."; \
+	for i in $$(seq 1 60); do \
+	  curl -fsS http://localhost:8082/healthz > /dev/null 2>&1 && break; sleep 1; \
+	done; \
+	echo "Waiting for TLS sync service readiness..."; \
+	for i in $$(seq 1 45); do \
+	  docker-compose --profile sync --profile tls logs sync-service-tls 2>&1 | grep -q "Sync service ready" && break; sleep 1; \
+	done; \
+	echo "Running sessions integration tests against TLS upstream stack..."; \
+	cd e2e && npm install && E2E_BASE_URL=http://localhost:8082 npx vitest run --reporter=verbose sessions.test.mjs; \
+	RESULT=$$?; \
+	echo "Stopping TLS sessions stack..."; \
+	docker-compose --profile sync --profile tls down; \
 	exit $$RESULT
 
 integration-test-electric:

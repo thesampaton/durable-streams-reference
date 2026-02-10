@@ -1,0 +1,89 @@
+static_resources:
+  listeners:
+    - name: listener_tls_upstream
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http_tls_upstream
+                codec_type: AUTO
+                stream_idle_timeout: 0s
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path: "/healthz"
+                          route:
+                            cluster: durable_streams_server_tls
+                            timeout: 5s
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: durable_streams_server_tls
+                            timeout: 0s
+                            idle_timeout: 120s
+                http_filters:
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        durable_streams_provider:
+                          issuer: durable-streams-test
+                          audiences:
+                            - durable-streams
+                          local_jwks:
+                            filename: /etc/envoy/jwks.json
+                          forward: true
+                          claim_to_headers:
+                            - header_name: X-JWT-Sub
+                              claim_name: sub
+                      rules:
+                        - match:
+                            path: "/healthz"
+                        - match:
+                            prefix: "/"
+                          requires:
+                            provider_name: durable_streams_provider
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: durable_streams_server_tls
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: durable_streams_server_tls
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: server
+                      port_value: 4438
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: server
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/envoy/upstream-ca.pem
+            tls_params:
+              tls_minimum_protocol_version: TLSv1_3
+              tls_maximum_protocol_version: TLSv1_3
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
