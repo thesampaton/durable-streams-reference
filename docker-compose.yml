@@ -2,9 +2,9 @@ services:
   server:
     build: .
     environment:
-      PORT: "4437"
-      LONG_POLL_TIMEOUT_SECS: "30"
-      SSE_RECONNECT_INTERVAL_SECS: "60"
+      DS_SERVER__PORT: "4437"
+      DS_SERVER__LONG_POLL_TIMEOUT_SECS: "30"
+      DS_SERVER__SSE_RECONNECT_INTERVAL_SECS: "60"
       RUST_LOG: "info"
     ports:
       - "4437:4437"
@@ -12,12 +12,12 @@ services:
   server-tls:
     build: .
     environment:
-      PORT: "4438"
-      LONG_POLL_TIMEOUT_SECS: "30"
-      SSE_RECONNECT_INTERVAL_SECS: "60"
+      DS_SERVER__PORT: "4438"
+      DS_SERVER__LONG_POLL_TIMEOUT_SECS: "30"
+      DS_SERVER__SSE_RECONNECT_INTERVAL_SECS: "60"
       RUST_LOG: "info"
-      TLS_CERT_PATH: "/etc/ds/tls/server-cert.pem"
-      TLS_KEY_PATH: "/etc/ds/tls/server-key.pem"
+      DS_TLS__CERT_PATH: "/etc/ds/tls/server-cert.pem"
+      DS_TLS__KEY_PATH: "/etc/ds/tls/server-key.pem"
     volumes:
       - ./e2e/fixtures/ds-server-cert.pem:/etc/ds/tls/server-cert.pem:ro
       - ./e2e/fixtures/ds-server-key.pem:/etc/ds/tls/server-key.pem:ro
