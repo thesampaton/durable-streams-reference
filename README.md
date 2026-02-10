@@ -22,6 +22,31 @@ cargo clippy -- -D warnings  # lint
 cargo fmt            # format
 ```
 
+## Performance builds (PGO)
+
+Use profile-guided optimization (PGO) for production-oriented builds:
+
+```bash
+# 1) Generate and merge fresh profiles using benchmark traffic
+make pgo-train
+
+# 2) Build release binary with profile-use (fails if profile is missing/stale)
+make release-pgo
+
+# 3) Optional: compare profile-use performance vs baseline
+make pgo-benchmark
+```
+
+Key PGO controls:
+
+- `PGO_DIR` (default: `/tmp/ds-pgo`) for profile artifacts
+- `PGO_REQUIRE_FRESH` (default: `true`) to enforce freshness checks
+- `PGO_MAX_AGE_HOURS` (default: `168`) maximum allowed profile age
+- `PGO_WARN_MISSING` (default: `false`) enables/disables LLVM missing-profile warnings
+
+CI also has a dedicated PGO workflow at `.github/workflows/pgo-release.yml` that
+trains profiles and publishes a `release-pgo` artifact.
+
 ## Conformance
 
 This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.1`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md).

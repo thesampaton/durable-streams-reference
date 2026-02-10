@@ -53,8 +53,14 @@ cargo fmt -- --check           # format check
 make conformance               # external conformance suite
 make integration-test          # Docker stack e2e tests
 make integration-test-sessions # sessions + DB sync tests
+make pgo-train                 # generate + merge PGO profile data
+make release-pgo               # guarded profile-use release build
+make pgo-benchmark             # benchmark profile-use build
 make docs                      # build mdbook documentation
 ```
+
+For release/performance work, prefer `make release-pgo` after `make pgo-train`
+so artifacts are built from current benchmark-driven profiles.
 
 ## Documentation
 
