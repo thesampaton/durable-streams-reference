@@ -47,6 +47,16 @@ Key PGO controls:
 CI also has a dedicated PGO workflow at `.github/workflows/pgo-release.yml` that
 trains profiles and publishes a `release-pgo` artifact.
 
+## Benchmark findings
+
+The latest benchmark matrix findings are in
+[`docs/benchmark-report.md`](docs/benchmark-report.md). It includes:
+
+- 3 runs each for Rust (`memory`, `file-durable`, `acid`), Node (`memory`,
+  `file`), and Caddy plugin (`memory`, `acid` label for plugin file-backed mode)
+- fresh Rust PGO profile training before measurements
+- explicit durability semantics notes for `acid` vs Caddy `acid` interpretation
+
 ## Conformance
 
 This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.1`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md).
