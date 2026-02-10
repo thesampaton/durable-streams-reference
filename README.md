@@ -3,7 +3,9 @@
 [![CI](https://github.com/thesampaton/durable-streams-reference/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-reference/actions/workflows/ci.yml)
 [![Conformance](https://github.com/thesampaton/durable-streams-reference/actions/workflows/conformance.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-reference/actions/workflows/conformance.yml)
 
-Reference implementation of the [durable streams protocol](https://github.com/durable-streams/durable-streams), built on [Electric SQL](https://electric-sql.com/).
+Reference implementation of the [durable streams protocol](https://github.com/durable-streams/durable-streams) in rust, with idiomatic approaches to fulfilling the protocol specification and near-parity with the caddy production implementation. This project exists to validate ai-enabled development approaches, to pressure test the durable streams approach and to document how to deliver an end to end solution with durable streams, electric sql and postgres, using the gatekeeper auth pattern.
+
+Documents https://thesampaton.github.io/durable-streams-reference/
 
 ## Quick start
 
