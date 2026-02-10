@@ -1,7 +1,7 @@
 use durable_streams_reference::{
-    config::Config,
+    config::{Config, StorageMode},
     router,
-    storage::{Storage, file::FileStorage, memory::InMemoryStorage},
+    storage::{Storage, acid::AcidStorage, file::FileStorage, memory::InMemoryStorage},
 };
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -28,29 +28,49 @@ async fn main() {
     );
     tracing::info!("Storage mode: {}", config.storage_mode.as_str());
 
-    if config.storage_mode.uses_file_backend() {
-        let sync_on_append = config.storage_mode.sync_on_append();
-        tracing::info!(
-            "File storage dir: {}, sync on append: {}",
-            config.data_dir,
-            sync_on_append
-        );
-        let storage = Arc::new(
-            FileStorage::new(
-                &config.data_dir,
+    match config.storage_mode {
+        StorageMode::Memory => {
+            let storage = Arc::new(InMemoryStorage::new(
                 config.max_memory_bytes,
                 config.max_stream_bytes,
-                sync_on_append,
-            )
-            .unwrap_or_else(|e| panic!("Failed to initialize file storage: {e}")),
-        );
-        serve(storage, &config, &addr).await;
-    } else {
-        let storage = Arc::new(InMemoryStorage::new(
-            config.max_memory_bytes,
-            config.max_stream_bytes,
-        ));
-        serve(storage, &config, &addr).await;
+            ));
+            serve(storage, &config, &addr).await;
+        }
+        StorageMode::FileFast | StorageMode::FileDurable => {
+            let sync_on_append = config.storage_mode.sync_on_append();
+            tracing::info!(
+                "File storage dir: {}, sync on append: {}",
+                config.data_dir,
+                sync_on_append
+            );
+            let storage = Arc::new(
+                FileStorage::new(
+                    &config.data_dir,
+                    config.max_memory_bytes,
+                    config.max_stream_bytes,
+                    sync_on_append,
+                )
+                .unwrap_or_else(|e| panic!("Failed to initialize file storage: {e}")),
+            );
+            serve(storage, &config, &addr).await;
+        }
+        StorageMode::Acid => {
+            tracing::info!(
+                "Acid storage dir: {}, shards: {}",
+                config.data_dir,
+                config.acid_shard_count
+            );
+            let storage = Arc::new(
+                AcidStorage::new(
+                    &config.data_dir,
+                    config.acid_shard_count,
+                    config.max_memory_bytes,
+                    config.max_stream_bytes,
+                )
+                .unwrap_or_else(|e| panic!("Failed to initialize acid storage: {e}")),
+            );
+            serve(storage, &config, &addr).await;
+        }
     }
 }
 
