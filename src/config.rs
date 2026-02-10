@@ -35,10 +35,6 @@ impl StorageMode {
         matches!(self, Self::FileDurable)
     }
 
-    #[must_use]
-    pub fn uses_acid_backend(self) -> bool {
-        matches!(self, Self::Acid)
-    }
 }
 
 /// Server configuration
