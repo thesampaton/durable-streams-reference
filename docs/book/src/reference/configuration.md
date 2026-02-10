@@ -9,6 +9,13 @@ The DS server is configured entirely through environment variables. All have sen
 | `PORT` | `4437` | TCP port to listen on |
 | `RUST_LOG` | `info` | Log level filter ([tracing](https://docs.rs/tracing-subscriber) format: `debug`, `info`, `warn`, `error`, or per-module like `durable_streams=debug`) |
 
+## Transport (optional direct TLS)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TLS_CERT_PATH` | _unset_ | Path to PEM certificate for direct TLS termination. Must be set together with `TLS_KEY_PATH`. |
+| `TLS_KEY_PATH` | _unset_ | Path to PEM/PKCS#8 private key for direct TLS termination. Must be set together with `TLS_CERT_PATH`. |
+
 ## Protocol
 
 | Variable | Default | Description |
@@ -55,6 +62,9 @@ LONG_POLL_TIMEOUT_SECS=2 SSE_RECONNECT_INTERVAL_SECS=5 cargo run
 
 # Production (restricted CORS, custom port)
 PORT=8080 CORS_ORIGINS=https://app.example.com cargo run
+
+# Optional direct TLS (proxy->server encryption or direct serving)
+TLS_CERT_PATH=/etc/ds/tls/server.crt TLS_KEY_PATH=/etc/ds/tls/server.key cargo run
 
 # Debug logging
 RUST_LOG=debug cargo run

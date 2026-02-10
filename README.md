@@ -89,4 +89,6 @@ CONFORMANCE_TEST_URL=http://localhost:4437 npx vitest run conformance.test.mjs
 | `STORAGE_MODE` | `memory` | Storage backend: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`) |
 | `DATA_DIR` | `./data/streams` | Root directory for file/acid persistent storage |
 | `ACID_SHARD_COUNT` | `16` | Number of redb shards for `STORAGE_MODE=acid` (power-of-2, `1..=256`) |
+| `TLS_CERT_PATH` | _(unset)_ | Optional PEM certificate path for direct TLS termination (requires `TLS_KEY_PATH`) |
+| `TLS_KEY_PATH` | _(unset)_ | Optional PEM/PKCS#8 key path for direct TLS termination (requires `TLS_CERT_PATH`) |
 | `RUST_LOG` | `info` | Log level filter |

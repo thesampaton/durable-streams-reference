@@ -32,6 +32,9 @@ This document records implementation decisions in three categories:
 | Health check at `/healthz` outside `/v1/stream/` namespace | Server routing | Health checks are infrastructure concern, not protocol API. Keeping separate namespaces avoids coupling infra probes to protocol versioning. | 2026-02-06 |
 | Replace Electric-only test with Sessions + bidirectional DB sync | Test/deployment architecture | DS is lower-level than Electric; the sessions pattern is the primary production use case. Bidirectional PG sync validates both PG→DS and DS→PG paths. | 2026-02-09 |
 | CORS: allow all origins by default, configurable via `CORS_ORIGINS` | Deployment defaults | CORS is not part of protocol semantics. Default allow-all suits development; production deployments restrict via env var or auth proxy. | 2026-02-09 |
+| Runtime lifecycle hooks mirror Caddy shape (`provision`, `validate`, `cleanup`) | Server bootstrap | Keeps operational model aligned with canonical Caddy implementation and creates explicit startup/shutdown extension points. | 2026-02-10 |
+| Direct TLS termination is optional via `TLS_CERT_PATH` + `TLS_KEY_PATH` | Transport/deployment | Preserves proxy-terminated TLS as default while enabling encrypted proxy→server links when needed. | 2026-02-10 |
+| Location header prefers `X-Forwarded-Host` over `Host` | Proxy compatibility | Behind a reverse proxy the `Host` header reflects the internal address. `X-Forwarded-Host` carries the original client-facing authority, producing correct absolute Location URLs on 201 Created. Falls back to `Host` then `localhost`. | 2026-02-10 |
 
 ## Decision Entry Format
 
