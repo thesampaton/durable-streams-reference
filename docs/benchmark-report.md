@@ -8,6 +8,12 @@ the official production deployment target for durable streams (see
 
 ## Latest Run (Optimized)
 
+> Note: the current optimization pipeline in this repo includes profile-guided
+> optimization (PGO) via Make targets (`pgo-train`, `release-pgo`,
+> `pgo-benchmark`) and CI workflow `.github/workflows/pgo-release.yml`.
+> Earlier notes in this report that mention LTO/codegen experiments should be
+> treated as historical experiment context, not current release defaults.
+
 - Generated (Local): 2026-02-10 00:36:08 AEDT
 - Generated (UTC): 2026-02-09 13:36:08 UTC
 - Branch: `claude/optimize-rust-server-oH0uA`

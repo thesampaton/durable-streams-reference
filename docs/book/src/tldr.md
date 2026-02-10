@@ -80,6 +80,14 @@ make integration-test           # Docker e2e (auth)
 make integration-test-sessions  # Docker e2e (auth + Postgres sync)
 ```
 
+## Production perf build (PGO)
+
+```bash
+make pgo-train      # generate + merge profile data from benchmark traffic
+make release-pgo    # guarded profile-use release build
+make pgo-benchmark  # optional compare run for profile-use build
+```
+
 ## Build the docs
 
 ```bash
