@@ -10,6 +10,8 @@ pub enum StorageMode {
     FileFast,
     /// File backend with fsync/fdatasync on every append.
     FileDurable,
+    /// ACID backend using sharded redb databases.
+    Acid,
 }
 
 impl StorageMode {
@@ -19,6 +21,7 @@ impl StorageMode {
             Self::Memory => "memory",
             Self::FileFast => "file-fast",
             Self::FileDurable => "file-durable",
+            Self::Acid => "acid",
         }
     }
 
@@ -30,6 +33,11 @@ impl StorageMode {
     #[must_use]
     pub fn sync_on_append(self) -> bool {
         matches!(self, Self::FileDurable)
+    }
+
+    #[must_use]
+    pub fn uses_acid_backend(self) -> bool {
+        matches!(self, Self::Acid)
     }
 }
 
@@ -53,10 +61,12 @@ pub struct Config {
     pub sse_reconnect_interval_secs: u64,
     /// Selected storage mode
     pub storage_mode: StorageMode,
-    /// Root directory for file-backed storage.
+    /// Root directory for file/acid-backed storage.
     ///
     /// Matches Caddy's `data_dir`.
     pub data_dir: String,
+    /// Number of shards for acid/redb storage mode.
+    pub acid_shard_count: usize,
 }
 
 impl Config {
@@ -80,6 +90,7 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
         let storage_mode = Self::parse_storage_mode(&get);
+        let acid_shard_count = Self::parse_acid_shard_count(&get);
 
         Self {
             port: get("PORT").and_then(|s| s.parse().ok()).unwrap_or(4437),
@@ -94,6 +105,7 @@ impl Config {
             sse_reconnect_interval_secs,
             storage_mode,
             data_dir: get("DATA_DIR").unwrap_or_else(|| "./data/streams".to_string()),
+            acid_shard_count,
         }
     }
 
@@ -123,8 +135,29 @@ impl Config {
             "memory" => Some(StorageMode::Memory),
             "file" | "file-durable" | "durable" => Some(StorageMode::FileDurable),
             "file-fast" | "fast" => Some(StorageMode::FileFast),
+            "acid" | "redb" => Some(StorageMode::Acid),
             _ => None,
         }
+    }
+
+    fn parse_acid_shard_count(get: &impl Fn(&str) -> Option<String>) -> usize {
+        const DEFAULT: usize = 16;
+        const MIN: usize = 1;
+        const MAX: usize = 256;
+
+        let Some(raw) = get("ACID_SHARD_COUNT") else {
+            return DEFAULT;
+        };
+        let Ok(value) = raw.parse::<usize>() else {
+            return DEFAULT;
+        };
+        if !(MIN..=MAX).contains(&value) {
+            return DEFAULT;
+        }
+        if !value.is_power_of_two() {
+            return DEFAULT;
+        }
+        value
     }
 
     fn parse_bool(raw: &str) -> bool {
@@ -143,6 +176,7 @@ impl Default for Config {
             sse_reconnect_interval_secs: 60,
             storage_mode: StorageMode::Memory,
             data_dir: "./data/streams".to_string(),
+            acid_shard_count: 16,
         }
     }
 }
@@ -182,6 +216,7 @@ mod tests {
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.data_dir, "./data/streams");
+        assert_eq!(config.acid_shard_count, 16);
     }
 
     #[test]
@@ -195,6 +230,7 @@ mod tests {
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.data_dir, "./data/streams");
+        assert_eq!(config.acid_shard_count, 16);
     }
 
     #[test]
@@ -208,6 +244,7 @@ mod tests {
             ("SSE_RECONNECT_INTERVAL_SECS", "120"),
             ("STORAGE_MODE", "file-fast"),
             ("DATA_DIR", "/tmp/ds-store"),
+            ("ACID_SHARD_COUNT", "32"),
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.port, 8080);
@@ -218,6 +255,7 @@ mod tests {
         assert_eq!(config.sse_reconnect_interval_secs, 120);
         assert_eq!(config.storage_mode, StorageMode::FileFast);
         assert_eq!(config.data_dir, "/tmp/ds-store");
+        assert_eq!(config.acid_shard_count, 32);
     }
 
     #[test]
@@ -237,6 +275,7 @@ mod tests {
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
+        assert_eq!(config.acid_shard_count, 16);
     }
 
     #[test]
@@ -251,6 +290,7 @@ mod tests {
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
         assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
+        assert_eq!(config.acid_shard_count, 16);
     }
 
     #[test]
@@ -270,6 +310,7 @@ mod tests {
         );
         assert_eq!(via_env.storage_mode, via_lookup.storage_mode);
         assert_eq!(via_env.data_dir, via_lookup.data_dir);
+        assert_eq!(via_env.acid_shard_count, via_lookup.acid_shard_count);
     }
 
     #[test]
@@ -287,6 +328,45 @@ mod tests {
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.storage_mode, StorageMode::FileFast);
+    }
+
+    #[test]
+    fn test_storage_mode_acid_aliases() {
+        let config = Config::from_lookup(lookup(&[("STORAGE_MODE", "acid")]));
+        assert_eq!(config.storage_mode, StorageMode::Acid);
+
+        let config = Config::from_lookup(lookup(&[("STORAGE_MODE", "redb")]));
+        assert_eq!(config.storage_mode, StorageMode::Acid);
+    }
+
+    #[test]
+    fn test_acid_shard_count_default() {
+        let config = Config::from_lookup(|_| None);
+        assert_eq!(config.acid_shard_count, 16);
+    }
+
+    #[test]
+    fn test_acid_shard_count_valid_values() {
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "1")]));
+        assert_eq!(config.acid_shard_count, 1);
+
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "256")]));
+        assert_eq!(config.acid_shard_count, 256);
+    }
+
+    #[test]
+    fn test_acid_shard_count_invalid_values_fall_back_to_default() {
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "0")]));
+        assert_eq!(config.acid_shard_count, 16);
+
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "3")]));
+        assert_eq!(config.acid_shard_count, 16);
+
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "300")]));
+        assert_eq!(config.acid_shard_count, 16);
+
+        let config = Config::from_lookup(lookup(&[("ACID_SHARD_COUNT", "abc")]));
+        assert_eq!(config.acid_shard_count, 16);
     }
 
     #[test]
