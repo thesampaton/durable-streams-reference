@@ -93,6 +93,14 @@ impl InMemoryStorage {
         self.total_bytes.load(Ordering::Acquire)
     }
 
+    fn saturating_sub_total_bytes(&self, bytes: u64) {
+        self.total_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(bytes))
+            })
+            .ok();
+    }
+
     fn get_stream(&self, name: &str) -> Option<Arc<RwLock<StreamEntry>>> {
         let streams = self.streams.read().expect("streams lock poisoned");
         streams.get(name).map(Arc::clone)
@@ -128,8 +136,7 @@ impl InMemoryStorage {
             return Err(Error::MemoryLimitExceeded);
         }
         if stream.total_bytes + total_batch_bytes > self.max_stream_bytes {
-            self.total_bytes
-                .fetch_sub(total_batch_bytes, Ordering::AcqRel);
+            self.saturating_sub_total_bytes(total_batch_bytes);
             return Err(Error::StreamSizeLimitExceeded);
         }
 
@@ -213,7 +220,7 @@ impl Storage for InMemoryStorage {
         }
 
         if stream.total_bytes + byte_len > self.max_stream_bytes {
-            self.total_bytes.fetch_sub(byte_len, Ordering::AcqRel);
+            self.saturating_sub_total_bytes(byte_len);
             return Err(Error::StreamSizeLimitExceeded);
         }
 
@@ -323,11 +330,7 @@ impl Storage for InMemoryStorage {
 
         if let Some(stream_arc) = streams.remove(name) {
             let stream = stream_arc.read().expect("stream lock poisoned");
-            self.total_bytes
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                    Some(current.saturating_sub(stream.total_bytes))
-                })
-                .ok();
+            self.saturating_sub_total_bytes(stream.total_bytes);
             Ok(())
         } else {
             Err(Error::NotFound(name.to_string()))
@@ -459,11 +462,7 @@ impl Storage for InMemoryStorage {
                 let stream_bytes = stream.total_bytes;
                 drop(stream);
                 streams.remove(name);
-                self.total_bytes
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                        Some(current.saturating_sub(stream_bytes))
-                    })
-                    .ok();
+                self.saturating_sub_total_bytes(stream_bytes);
             } else if stream.config == config {
                 let next_offset = Offset::new(stream.next_read_seq, stream.next_byte_offset);
                 let closed = stream.closed;
