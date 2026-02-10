@@ -1,0 +1,63 @@
+name: PGO Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ trunk ]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-pgo:
+    name: Train And Build PGO Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Train PGO profiles
+        run: make pgo-train
+
+      - name: Build release with PGO (freshness enforced)
+        run: make release-pgo PGO_REQUIRE_FRESH=true PGO_MAX_AGE_HOURS=24
+
+      - name: Upload PGO release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-streams-pgo-release
+          path: |
+            target/release/durable-streams-reference
+            /tmp/ds-pgo/merged.profdata
+            /tmp/benchmark-run/benchmark-results-pgo-memory.json
+            /tmp/benchmark-run/benchmark-results-pgo-file.json
