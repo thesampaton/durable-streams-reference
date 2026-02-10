@@ -411,6 +411,10 @@ impl FileStorage {
         let before_len = stream.file_len;
 
         if let Err(e) = stream.file.write_all(&write_buf) {
+            // Write errors may still leave partial bytes on disk; refresh cached length.
+            if let Ok(m) = stream.file.metadata() {
+                stream.file_len = m.len();
+            }
             self.rollback_total_bytes(total_batch_bytes);
             return Err(Error::Storage(format!(
                 "failed to append stream log for {name}: {e}"
@@ -420,6 +424,10 @@ impl FileStorage {
         if self.sync_on_append
             && let Err(e) = stream.file.sync_data()
         {
+            // Data may be written even if fsync fails; refresh cached length.
+            if let Ok(m) = stream.file.metadata() {
+                stream.file_len = m.len();
+            }
             self.rollback_total_bytes(total_batch_bytes);
             return Err(Error::Storage(format!(
                 "failed to sync stream log for {name}: {e}"
