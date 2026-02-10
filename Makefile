@@ -1,4 +1,4 @@
-.PHONY: build release lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-merge pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
+.PHONY: build release release-pgo lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-merge pgo-verify pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
 .NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file
 
 # Default target
@@ -8,6 +8,7 @@ help:
 	@echo "Build & Run:"
 	@echo "  build                 - Build debug binary"
 	@echo "  release               - Build release binary"
+	@echo "  release-pgo           - Build release binary with profile-use (fails if profile missing/stale)"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  lint                  - Run clippy with warnings as errors"
@@ -30,6 +31,7 @@ help:
 	@echo "  benchmark-caddy-file  - Run benchmark suite against Caddy plugin (file)"
 	@echo "  pgo-train             - Generate fresh PGO profiles using memory+file benchmarks"
 	@echo "  pgo-merge             - Merge raw PGO profiles into a .profdata file"
+	@echo "  pgo-verify            - Verify merged profile exists and is fresh enough"
 	@echo "  pgo-build             - Build release binary with merged PGO profile"
 	@echo "  pgo-benchmark         - Benchmark with profile-use build flags enabled"
 	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
@@ -59,6 +61,9 @@ build:
 
 release:
 	cargo build --release $(CARGO_FEATURES)
+
+release-pgo: pgo-verify
+	RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" cargo build --release $(CARGO_FEATURES)
 
 # Code quality targets
 lint:
@@ -148,6 +153,8 @@ PGO_PROFILE_DATA := $(PGO_DIR)/merged.profdata
 PGO_RUSTFLAGS_GEN := -Cprofile-generate=$(PGO_PROFILE_DIR)
 PGO_WARN_MISSING ?= false
 PGO_RUSTFLAGS_USE := -Cprofile-use=$(PGO_PROFILE_DATA) -Cllvm-args=-pgo-warn-missing-function=$(PGO_WARN_MISSING)
+PGO_REQUIRE_FRESH ?= true
+PGO_MAX_AGE_HOURS ?= 168
 
 benchmark: benchmark-memory benchmark-file
 	@echo ""
@@ -196,6 +203,24 @@ pgo-merge:
 	@mkdir -p $(PGO_DIR)
 	@$(LLVM_PROFDATA) merge -o $(PGO_PROFILE_DATA) $(PGO_PROFILE_DIR)/*.profraw
 	@echo "Merged profile data written to $(PGO_PROFILE_DATA)"
+
+pgo-verify:
+	@test -f "$(PGO_PROFILE_DATA)" || (echo "Missing merged PGO profile at $(PGO_PROFILE_DATA). Run 'make pgo-train' first." && exit 1)
+	@if [ "$(PGO_REQUIRE_FRESH)" = "true" ]; then \
+		NOW_EPOCH=$$(date +%s); \
+		if stat -f %m "$(PGO_PROFILE_DATA)" >/dev/null 2>&1; then \
+			PROFILE_EPOCH=$$(stat -f %m "$(PGO_PROFILE_DATA)"); \
+		else \
+			PROFILE_EPOCH=$$(stat -c %Y "$(PGO_PROFILE_DATA)"); \
+		fi; \
+		MAX_AGE_SECS=$$(( $(PGO_MAX_AGE_HOURS) * 3600 )); \
+		AGE_SECS=$$(( NOW_EPOCH - PROFILE_EPOCH )); \
+		if [ $$AGE_SECS -gt $$MAX_AGE_SECS ]; then \
+			echo "PGO profile is stale: $$AGE_SECS seconds old (max $$MAX_AGE_SECS)."; \
+			echo "Run 'make pgo-train' to regenerate, or override with PGO_REQUIRE_FRESH=false."; \
+			exit 1; \
+		fi; \
+	fi
 
 pgo-build: pgo-merge
 	@RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" cargo build --release $(CARGO_FEATURES)
