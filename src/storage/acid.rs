@@ -112,9 +112,6 @@ impl AcidStorage {
         Ok(storage)
     }
 
-    /// # Panics
-    ///
-    /// Panics if the internal bytes counter lock is poisoned.
     #[must_use]
     pub fn total_bytes(&self) -> u64 {
         self.total_bytes.load(Ordering::Acquire)
