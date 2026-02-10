@@ -1,0 +1,23 @@
+[server]
+port = 4437
+long_poll_timeout_secs = 30
+sse_reconnect_interval_secs = 60
+
+[limits]
+max_memory_bytes = 104857600
+max_stream_bytes = 10485760
+
+[http]
+cors_origins = "*"
+
+[storage]
+mode = "memory"
+data_dir = "./data/streams"
+acid_shard_count = 16
+
+[tls]
+# cert_path = "/etc/ds/tls/server-cert.pem"
+# key_path = "/etc/ds/tls/server-key.pem"
+
+[log]
+rust_log = "info"

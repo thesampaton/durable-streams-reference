@@ -1,14 +1,68 @@
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use durable_streams_reference::{
-    config::{Config, StorageMode},
+    config::{Config, ConfigLoadOptions, StorageMode},
     router,
     storage::{Storage, acid::AcidStorage, file::FileStorage, memory::InMemoryStorage},
 };
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+struct CliArgs {
+    profile: String,
+    config_override: Option<PathBuf>,
+}
+
+impl CliArgs {
+    fn parse() -> Result<Self, String> {
+        let mut profile = String::from("default");
+        let mut config_override: Option<PathBuf> = None;
+
+        let mut args = std::env::args().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--help" | "-h" => {
+                    print_usage();
+                    std::process::exit(0);
+                }
+                "--profile" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --profile".to_string())?;
+                    profile = value;
+                }
+                "--config" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --config".to_string())?;
+                    config_override = Some(PathBuf::from(value));
+                }
+                _ if arg.starts_with("--profile=") => {
+                    profile = arg.trim_start_matches("--profile=").to_string();
+                }
+                _ if arg.starts_with("--config=") => {
+                    config_override = Some(PathBuf::from(arg.trim_start_matches("--config=")));
+                }
+                _ => {
+                    return Err(format!("unknown argument: {arg}"));
+                }
+            }
+        }
+
+        Ok(Self {
+            profile,
+            config_override,
+        })
+    }
+}
+
+fn print_usage() {
+    eprintln!("Usage: durable-streams-reference [--profile <name>] [--config <path>]");
+    eprintln!("  --profile <name>  Loads config/<name>.toml after config/default.toml");
+    eprintln!("  --config <path>   Loads an extra TOML override file last");
+}
 
 struct AppRuntime {
     config: Config,
@@ -67,21 +121,44 @@ fn ensure_regular_file(path: &str) -> Result<(), String> {
 
 #[tokio::main]
 async fn main() {
+    let cli = match CliArgs::parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            eprintln!("{err}");
+            print_usage();
+            std::process::exit(2);
+        }
+    };
+
+    let load_options = ConfigLoadOptions {
+        profile: cli.profile,
+        config_override: cli.config_override,
+        ..ConfigLoadOptions::default()
+    };
+
+    let config = match Config::from_sources(&load_options) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    };
+
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| config.rust_log.clone().into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    if let Err(err) = run().await {
+    if let Err(err) = run(config).await {
         tracing::error!("{err}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), String> {
-    let config = Config::from_env();
+async fn run(config: Config) -> Result<(), String> {
     let runtime = AppRuntime::new(config)?;
     runtime.provision();
     runtime.validate()?;

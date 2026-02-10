@@ -5,3 +5,4 @@
 e2e/node_modules/
 .dev/
 docs/book/book/
+config/local.toml

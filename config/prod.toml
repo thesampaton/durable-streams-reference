@@ -1,0 +1,25 @@
+[server]
+port = 4437
+long_poll_timeout_secs = 30
+sse_reconnect_interval_secs = 60
+
+[limits]
+max_memory_bytes = 536870912
+max_stream_bytes = 268435456
+
+[http]
+cors_origins = "https://app.example.com"
+
+[storage]
+mode = "file-durable"
+data_dir = "/var/lib/durable-streams"
+acid_shard_count = 16
+
+[tls]
+# Optional: enable direct TLS termination on the DS server.
+# In proxy topologies, TLS is often terminated at the edge and DS stays HTTP.
+# cert_path = "/etc/durable-streams/tls/server.crt"
+# key_path = "/etc/durable-streams/tls/server.key"
+
+[log]
+rust_log = "info"
