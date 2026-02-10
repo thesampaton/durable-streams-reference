@@ -88,7 +88,7 @@ data:{"streamNextOffset":"...","streamCursor":"...","upToDate":true}
 3. The connection stays open, waiting for new data
 4. New appends trigger additional `data` + `control` events
 5. If the stream is closed, the final `control` includes `streamClosed: true` and the connection closes
-6. Idle connections close after ~60 seconds (configurable via `SSE_IDLE_CLOSE_SECS`)
+6. Idle connections close after ~60 seconds (configurable via `SSE_RECONNECT_INTERVAL_SECS`)
 
 ### Binary streams
 

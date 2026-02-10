@@ -8,7 +8,7 @@ conservative, and what test would clarify it.
 
 | Ambiguity | Interpretation | Why Conservative | Clarifying Test | Date |
 |-----------|----------------|------------------|-----------------|------|
-| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_IDLE_CLOSE_SECS` env var (0 disables) | Spec says SHOULD close roughly every ~60s. Configurable allows tuning without code changes. Not adding fixed timing that can't be adjusted. | Conformance test that verifies SSE connections close within a window (e.g., 50-70s) after reaching idle at tail | 2026-02-07 |
+| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_RECONNECT_INTERVAL_SECS` env var (0 disables) | Spec says SHOULD close roughly every ~60s. Configurable allows tuning without code changes. Not adding fixed timing that can't be adjusted. | Conformance test that verifies SSE connections close within a window (e.g., 50-70s) after reaching idle at tail | 2026-02-07 |
 
 ## Gap Entry Format
 

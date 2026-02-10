@@ -46,12 +46,17 @@ pub struct Config {
     pub cors_origins: String,
     /// Long-poll timeout duration
     pub long_poll_timeout: Duration,
-    /// SSE idle close timeout in seconds (0 disables)
-    pub sse_idle_close_secs: u64,
+    /// SSE reconnect interval in seconds (0 disables).
+    ///
+    /// Matches Caddy's `sse_reconnect_interval`. Connections are closed after
+    /// this many idle seconds to enable CDN request collapsing.
+    pub sse_reconnect_interval_secs: u64,
     /// Selected storage mode
     pub storage_mode: StorageMode,
-    /// Root directory for file-backed storage
-    pub storage_dir: String,
+    /// Root directory for file-backed storage.
+    ///
+    /// Matches Caddy's `data_dir`.
+    pub data_dir: String,
 }
 
 impl Config {
@@ -71,7 +76,7 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
 
-        let sse_idle_close_secs: u64 = get("SSE_IDLE_CLOSE_SECS")
+        let sse_reconnect_interval_secs: u64 = get("SSE_RECONNECT_INTERVAL_SECS")
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
         let storage_mode = Self::parse_storage_mode(&get);
@@ -86,9 +91,9 @@ impl Config {
                 .unwrap_or(10 * 1024 * 1024), // 10 MB default
             cors_origins: get("CORS_ORIGINS").unwrap_or_else(|| "*".to_string()),
             long_poll_timeout: Duration::from_secs(long_poll_secs),
-            sse_idle_close_secs,
+            sse_reconnect_interval_secs,
             storage_mode,
-            storage_dir: get("STORAGE_DIR").unwrap_or_else(|| "./data/streams".to_string()),
+            data_dir: get("DATA_DIR").unwrap_or_else(|| "./data/streams".to_string()),
         }
     }
 
@@ -135,9 +140,9 @@ impl Default for Config {
             max_stream_bytes: 10 * 1024 * 1024,
             cors_origins: "*".to_string(),
             long_poll_timeout: Duration::from_secs(30),
-            sse_idle_close_secs: 60,
+            sse_reconnect_interval_secs: 60,
             storage_mode: StorageMode::Memory,
-            storage_dir: "./data/streams".to_string(),
+            data_dir: "./data/streams".to_string(),
         }
     }
 }
@@ -146,11 +151,11 @@ impl Default for Config {
 #[derive(Debug, Clone, Copy)]
 pub struct LongPollTimeout(pub Duration);
 
-/// Typed wrapper for SSE idle close timeout in seconds (0 = disabled).
+/// Typed wrapper for SSE reconnect interval in seconds (0 = disabled).
 ///
-/// Injected via axum `Extension`.
+/// Matches Caddy's `sse_reconnect_interval`. Injected via axum `Extension`.
 #[derive(Debug, Clone, Copy)]
-pub struct SseIdleClose(pub u64);
+pub struct SseReconnectInterval(pub u64);
 
 #[cfg(test)]
 mod tests {
@@ -174,9 +179,9 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
-        assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
-        assert_eq!(config.storage_dir, "./data/streams");
+        assert_eq!(config.data_dir, "./data/streams");
     }
 
     #[test]
@@ -187,9 +192,9 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
-        assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
-        assert_eq!(config.storage_dir, "./data/streams");
+        assert_eq!(config.data_dir, "./data/streams");
     }
 
     #[test]
@@ -200,9 +205,9 @@ mod tests {
             ("MAX_STREAM_BYTES", "20000000"),
             ("CORS_ORIGINS", "https://example.com"),
             ("LONG_POLL_TIMEOUT_SECS", "5"),
-            ("SSE_IDLE_CLOSE_SECS", "120"),
+            ("SSE_RECONNECT_INTERVAL_SECS", "120"),
             ("STORAGE_MODE", "file-fast"),
-            ("STORAGE_DIR", "/tmp/ds-store"),
+            ("DATA_DIR", "/tmp/ds-store"),
         ]);
         let config = Config::from_lookup(get);
         assert_eq!(config.port, 8080);
@@ -210,9 +215,9 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 20_000_000);
         assert_eq!(config.cors_origins, "https://example.com");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(5));
-        assert_eq!(config.sse_idle_close_secs, 120);
+        assert_eq!(config.sse_reconnect_interval_secs, 120);
         assert_eq!(config.storage_mode, StorageMode::FileFast);
-        assert_eq!(config.storage_dir, "/tmp/ds-store");
+        assert_eq!(config.data_dir, "/tmp/ds-store");
     }
 
     #[test]
@@ -222,7 +227,7 @@ mod tests {
             ("MAX_MEMORY_BYTES", ""),
             ("MAX_STREAM_BYTES", "-1"),
             ("LONG_POLL_TIMEOUT_SECS", "abc"),
-            ("SSE_IDLE_CLOSE_SECS", "xyz"),
+            ("SSE_RECONNECT_INTERVAL_SECS", "xyz"),
         ]);
         let config = Config::from_lookup(get);
         // All fall back to defaults because the values don't parse
@@ -230,7 +235,7 @@ mod tests {
         assert_eq!(config.max_memory_bytes, 100 * 1024 * 1024);
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
-        assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
     }
 
@@ -244,7 +249,7 @@ mod tests {
         assert_eq!(config.max_stream_bytes, 10 * 1024 * 1024);
         assert_eq!(config.cors_origins, "*");
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
-        assert_eq!(config.sse_idle_close_secs, 60);
+        assert_eq!(config.sse_reconnect_interval_secs, 60);
         assert_eq!(config.storage_mode, StorageMode::Memory);
     }
 
@@ -259,9 +264,12 @@ mod tests {
         assert_eq!(via_env.max_stream_bytes, via_lookup.max_stream_bytes);
         assert_eq!(via_env.cors_origins, via_lookup.cors_origins);
         assert_eq!(via_env.long_poll_timeout, via_lookup.long_poll_timeout);
-        assert_eq!(via_env.sse_idle_close_secs, via_lookup.sse_idle_close_secs);
+        assert_eq!(
+            via_env.sse_reconnect_interval_secs,
+            via_lookup.sse_reconnect_interval_secs
+        );
         assert_eq!(via_env.storage_mode, via_lookup.storage_mode);
-        assert_eq!(via_env.storage_dir, via_lookup.storage_dir);
+        assert_eq!(via_env.data_dir, via_lookup.data_dir);
     }
 
     #[test]
@@ -288,8 +296,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sse_idle_close_newtype() {
-        let close = SseIdleClose(120);
-        assert_eq!(close.0, 120);
+    fn test_sse_reconnect_interval_newtype() {
+        let interval = SseReconnectInterval(120);
+        assert_eq!(interval.0, 120);
     }
 }

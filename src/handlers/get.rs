@@ -1,4 +1,4 @@
-use crate::config::{LongPollTimeout, SseIdleClose};
+use crate::config::{LongPollTimeout, SseReconnectInterval};
 use crate::protocol::cursor;
 use crate::protocol::error::{Error, Result};
 use crate::protocol::headers::names;
@@ -55,7 +55,7 @@ pub async fn read_stream<S: Storage + 'static>(
     Path(name): Path<String>,
     Query(query): Query<ReadQuery>,
     Extension(LongPollTimeout(timeout)): Extension<LongPollTimeout>,
-    Extension(SseIdleClose(idle_close_secs)): Extension<SseIdleClose>,
+    Extension(SseReconnectInterval(reconnect_interval_secs)): Extension<SseReconnectInterval>,
     headers: HeaderMap,
 ) -> Result<Response> {
     // Resolve offset: live modes require explicit offset, catch-up defaults to "-1"
@@ -92,7 +92,13 @@ pub async fn read_stream<S: Storage + 'static>(
                 )
                 .await
             }
-            "sse" => read_sse(storage, name, &offset, &content_type, idle_close_secs),
+            "sse" => read_sse(
+                storage,
+                name,
+                &offset,
+                &content_type,
+                reconnect_interval_secs,
+            ),
             other => Err(Error::InvalidHeader {
                 header: "live".to_string(),
                 reason: format!("unsupported live mode: {other}"),
@@ -202,7 +208,7 @@ fn read_sse<S: Storage + 'static>(
     name: String,
     offset: &Offset,
     content_type: &str,
-    idle_close_secs: u64,
+    reconnect_interval_secs: u64,
 ) -> Result<Response> {
     let is_binary = sse::is_binary_content_type(content_type);
     let is_json = json_mode::is_json_content_type(content_type);
@@ -222,7 +228,7 @@ fn read_sse<S: Storage + 'static>(
         receiver,
         is_binary,
         is_json,
-        idle_close_secs,
+        reconnect_interval_secs,
     );
 
     let body = Body::from_stream(byte_stream);
@@ -247,7 +253,7 @@ fn build_sse_byte_stream<S: Storage + 'static>(
     mut receiver: tokio::sync::broadcast::Receiver<()>,
     is_binary: bool,
     is_json: bool,
-    idle_close_secs: u64,
+    reconnect_interval_secs: u64,
 ) -> impl futures_util::stream::Stream<Item = std::result::Result<String, std::convert::Infallible>> + Send
 {
     async_stream::stream! {
@@ -268,8 +274,8 @@ fn build_sse_byte_stream<S: Storage + 'static>(
 
         // Enter wait loop at tail
         let mut tail_offset = read_result.next_offset;
-        let idle_timeout = if idle_close_secs > 0 {
-            Some(Duration::from_secs(idle_close_secs))
+        let idle_timeout = if reconnect_interval_secs > 0 {
+            Some(Duration::from_secs(reconnect_interval_secs))
         } else {
             None
         };

@@ -71,7 +71,7 @@ jobs:
           ./durable-streams-reference &
         env:
           LONG_POLL_TIMEOUT_SECS: '2'
-          SSE_IDLE_CLOSE_SECS: '5'
+          SSE_RECONNECT_INTERVAL_SECS: '5'
           RUST_LOG: warn
 
       - name: Wait for server health check

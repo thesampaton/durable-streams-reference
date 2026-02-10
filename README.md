@@ -54,7 +54,7 @@ This implementation targets full conformance with [`@durable-streams/server-conf
 Run conformance tests locally:
 
 ```bash
-LONG_POLL_TIMEOUT_SECS=2 SSE_IDLE_CLOSE_SECS=5 cargo run &
+LONG_POLL_TIMEOUT_SECS=2 SSE_RECONNECT_INTERVAL_SECS=5 cargo run &
 
 cd /tmp/conformance-run
 npm init -y
@@ -73,5 +73,5 @@ CONFORMANCE_TEST_URL=http://localhost:4437 npx vitest run conformance.test.mjs
 |---|---|---|
 | `PORT` | `4437` | Server listen port |
 | `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout in seconds |
-| `SSE_IDLE_CLOSE_SECS` | `60` | SSE idle connection close timeout |
+| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (matches Caddy's `sse_reconnect_interval`) |
 | `RUST_LOG` | `info` | Log level filter |

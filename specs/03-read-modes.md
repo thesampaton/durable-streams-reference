@@ -394,7 +394,7 @@ All other content types are treated as binary and base64-encoded.
 ### Idle Close
 
 This server defaults to closing idle SSE connections after 60 seconds,
-configurable via the `SSE_IDLE_CLOSE_SECS` environment variable (0 disables).
+configurable via the `SSE_RECONNECT_INTERVAL_SECS` environment variable (0 disables).
 
 ### Examples
 
@@ -466,4 +466,4 @@ This spec covers conformance test blocks:
 | Ambiguity | Interpretation | Why Conservative |
 |-----------|----------------|------------------|
 | Long-poll timeout value not specified | Default 30s, configurable via env var | Reasonable default; allows tuning without code changes |
-| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_IDLE_CLOSE_SECS` env var, 0 disables | Spec says SHOULD with ~60s; configurable allows tuning |
+| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_RECONNECT_INTERVAL_SECS` env var, 0 disables | Spec says SHOULD with ~60s; configurable allows tuning |

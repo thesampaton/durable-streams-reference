@@ -14,7 +14,7 @@ The DS server is configured entirely through environment variables. All have sen
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LONG_POLL_TIMEOUT_SECS` | `30` | How long to hold a long-poll request before returning `204 No Content`. Set lower (e.g., `2`) for fast-feedback testing. |
-| `SSE_IDLE_CLOSE_SECS` | `60` | Close idle SSE connections after this many seconds. Enables CDN request collapsing. Set to `0` to disable idle close entirely. |
+| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval in seconds (matches Caddy's `sse_reconnect_interval`). Enables CDN request collapsing. Set to `0` to disable. |
 
 ## Memory limits
 
@@ -43,7 +43,7 @@ These variables configure the sync service container, not the DS server itself:
 
 ```bash
 # Development (fast timeouts for testing)
-LONG_POLL_TIMEOUT_SECS=2 SSE_IDLE_CLOSE_SECS=5 cargo run
+LONG_POLL_TIMEOUT_SECS=2 SSE_RECONNECT_INTERVAL_SECS=5 cargo run
 
 # Production (restricted CORS, custom port)
 PORT=8080 CORS_ORIGINS=https://app.example.com cargo run

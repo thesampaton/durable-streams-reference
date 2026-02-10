@@ -34,7 +34,7 @@ Key defaults:
 |----------|---------|-------------|
 | `PORT` | `4437` | Listen port |
 | `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout |
-| `SSE_IDLE_CLOSE_SECS` | `60` | SSE idle close (0 to disable) |
+| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 to disable) |
 | `CORS_ORIGINS` | `*` | Allowed CORS origins |
 
 ## Security headers
