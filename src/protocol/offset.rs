@@ -351,6 +351,52 @@ mod tests {
     }
 
     #[test]
+    fn test_offset_sentinel_ordering() {
+        let start = Offset::start();
+        let now = Offset::now();
+        let zero = Offset::new(0, 0);
+        let mid = Offset::new(5, 10);
+
+        // "-1" < "0000..." (ASCII '-' < '0')
+        assert!(start < zero);
+        assert!(start < mid);
+
+        // "now" > "0000..." (ASCII 'n' > '0')
+        assert!(now > zero);
+        assert!(now > mid);
+
+        // Sentinels are not equal to each other
+        assert_ne!(start, now);
+
+        // Same sentinel is equal to itself
+        assert_eq!(Offset::start(), Offset::start());
+        assert_eq!(Offset::now(), Offset::now());
+    }
+
+    #[test]
+    fn test_offset_equality_and_hash() {
+        use std::collections::HashSet;
+
+        let a = Offset::new(1, 2);
+        let b = Offset::new(1, 2);
+        let c = Offset::new(1, 3);
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+
+        // Equal offsets must produce the same hash (HashSet insertion)
+        let mut set = HashSet::new();
+        set.insert(a.as_str().to_string());
+        assert!(set.contains(b.as_str()));
+
+        // Sentinels hash consistently
+        let mut set2 = HashSet::new();
+        set2.insert(Offset::start().as_str().to_string());
+        set2.insert(Offset::now().as_str().to_string());
+        assert_eq!(set2.len(), 2);
+    }
+
+    #[test]
     fn test_offset_display() {
         let offset = Offset::new(1, 2);
         assert_eq!(format!("{offset}"), "0000000000000001_0000000000000002");

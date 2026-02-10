@@ -42,18 +42,14 @@ pub fn process_append(data: &[u8]) -> Result<Vec<Bytes>> {
     }
 }
 
-/// Wrap messages in JSON array for read
+/// Wrap messages in JSON array for read.
 ///
 /// Takes a collection of JSON message bytes and wraps them in a JSON array.
 /// If the input is empty, returns an empty array `[]`.
 ///
 /// # Errors
 ///
-/// Returns `Error::InvalidJson` if any message is not valid JSON.
-///
-/// # Panics
-///
-/// Panics if serializing the final array fails, which should never happen.
+/// This function currently does not return errors and always returns `Ok`.
 pub fn wrap_read(messages: &[Bytes]) -> Result<Bytes> {
     wrap_read_iter(messages.iter())
 }
@@ -72,10 +68,13 @@ where
 {
     // Stored JSON messages are validated on write; build the array directly
     // to avoid per-message parse + re-serialize in read hot paths.
-    let mut out = BytesMut::new();
+    let iter = messages.into_iter();
+    let (lo, _) = iter.size_hint();
+    // Rough estimate: '[' + ']' + per-message avg ~64 bytes + commas
+    let mut out = BytesMut::with_capacity(2 + lo * 65);
     out.put_u8(b'[');
     let mut wrote_any = false;
-    for msg in messages {
+    for msg in iter {
         if wrote_any {
             out.put_u8(b',');
         }
