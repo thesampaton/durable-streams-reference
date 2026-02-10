@@ -37,7 +37,7 @@ Environment variables use the `DS_` prefix with double-underscore section separa
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DS_SERVER__PORT` | `4437` | TCP port to listen on |
-| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins. `*` allows all. Multiple origins can be comma-separated (e.g., `https://app.example.com,https://admin.example.com`). |
+| `DS_HTTP__CORS_ORIGINS` | `*` | Allowed CORS origins. `*` allows all. Multiple origins can be comma-separated (e.g., `https://app.example.com,https://admin.example.com`). |
 | `RUST_LOG` | `info` | Log level filter ([tracing](https://docs.rs/tracing-subscriber) format: `debug`, `info`, `warn`, `error`, or per-module like `durable_streams=debug`) |
 
 ## Transport (optional direct TLS)
@@ -89,7 +89,7 @@ DS_SERVER__LONG_POLL_TIMEOUT_SECS=2 DS_SERVER__SSE_RECONNECT_INTERVAL_SECS=5 car
 cargo run -- --profile dev
 
 # Production (restricted CORS, custom port)
-DS_SERVER__PORT=8080 DS_SERVER__CORS_ORIGINS=https://app.example.com cargo run
+DS_SERVER__PORT=8080 DS_HTTP__CORS_ORIGINS=https://app.example.com cargo run
 
 # Optional direct TLS (proxy->server encryption or direct serving)
 DS_TLS__CERT_PATH=/etc/ds/tls/server.crt DS_TLS__KEY_PATH=/etc/ds/tls/server.key cargo run

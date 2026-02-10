@@ -67,7 +67,7 @@ Adminer at `http://localhost:8081` (server: postgres, user: postgres, pw: passwo
 | `DS_SERVER__PORT` | `4437` | Listen port |
 | `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll wait |
 | `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 = off) |
-| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed origins |
+| `DS_HTTP__CORS_ORIGINS` | `*` | Allowed origins |
 | `DS_LIMITS__MAX_MEMORY_BYTES` | `104857600` | Total memory cap |
 | `DS_LIMITS__MAX_STREAM_BYTES` | `10485760` | Per-stream cap |
 
