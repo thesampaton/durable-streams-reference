@@ -151,7 +151,8 @@ pub async fn create_stream<S: Storage>(
 
 /// Build an absolute Location URL from request headers.
 ///
-/// Uses `Host` header for the authority and `X-Forwarded-Proto` for the scheme.
+/// Uses `X-Forwarded-Host`/`Host` for the authority and `X-Forwarded-Proto`
+/// for the scheme.
 /// Falls back to `http` and `localhost` when headers are absent.
 fn build_location_url(headers: &HeaderMap, name: &str) -> String {
     let scheme = headers
@@ -160,9 +161,35 @@ fn build_location_url(headers: &HeaderMap, name: &str) -> String {
         .unwrap_or("http");
 
     let host = headers
-        .get("host")
+        .get("x-forwarded-host")
         .and_then(|v| v.to_str().ok())
+        .or_else(|| headers.get("host").and_then(|v| v.to_str().ok()))
         .unwrap_or("localhost");
 
     format!("{scheme}://{host}/v1/stream/{name}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_location_prefers_x_forwarded_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("x-forwarded-host", "proxy.example.com".parse().unwrap());
+        headers.insert("host", "internal.local".parse().unwrap());
+
+        let location = build_location_url(&headers, "orders");
+        assert_eq!(location, "https://proxy.example.com/v1/stream/orders");
+    }
+
+    #[test]
+    fn test_build_location_falls_back_to_host_and_http() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "localhost:4437".parse().unwrap());
+
+        let location = build_location_url(&headers, "orders");
+        assert_eq!(location, "http://localhost:4437/v1/stream/orders");
+    }
 }
