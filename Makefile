@@ -1,5 +1,5 @@
-.PHONY: build release release-pgo lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-merge pgo-verify pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
-.NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file
+.PHONY: build release release-pgo lint fmt-check test conformance benchmark benchmark-memory benchmark-file benchmark-acid benchmark-node benchmark-node-memory benchmark-node-file node-ref-build benchmark-caddy benchmark-caddy-memory benchmark-caddy-file caddy-build pgo-clean pgo-train pgo-train-memory pgo-train-file pgo-train-acid pgo-merge pgo-verify pgo-build pgo-benchmark pgo-benchmark-memory pgo-benchmark-file pgo-benchmark-acid integration-test integration-test-sessions integration-test-electric docker docker-up docker-down docs docs-serve clean help dev dev-down dev-ui
+.NOTPARALLEL: benchmark benchmark-memory benchmark-file benchmark-acid benchmark-node benchmark-node-memory benchmark-node-file benchmark-caddy benchmark-caddy-memory benchmark-caddy-file pgo-train-acid pgo-benchmark-acid
 
 # Default target
 help:
@@ -23,6 +23,7 @@ help:
 	@echo "  benchmark             - Run benchmark-memory then benchmark-file (release)"
 	@echo "  benchmark-memory      - Run benchmark suite with in-memory storage"
 	@echo "  benchmark-file        - Run benchmark suite with file storage (durable mode)"
+	@echo "  benchmark-acid        - Run benchmark suite with acid storage (sharded redb)"
 	@echo "  benchmark-node        - Run benchmark-node-memory then benchmark-node-file"
 	@echo "  benchmark-node-memory - Run benchmark suite against Node reference (memory)"
 	@echo "  benchmark-node-file   - Run benchmark suite against Node reference (file)"
@@ -30,10 +31,12 @@ help:
 	@echo "  benchmark-caddy-memory - Run benchmark suite against Caddy plugin (memory)"
 	@echo "  benchmark-caddy-file  - Run benchmark suite against Caddy plugin (file)"
 	@echo "  pgo-train             - Generate fresh PGO profiles using memory+file benchmarks"
+	@echo "  pgo-train-acid        - Generate PGO profile data using acid benchmark traffic"
 	@echo "  pgo-merge             - Merge raw PGO profiles into a .profdata file"
 	@echo "  pgo-verify            - Verify merged profile exists and is fresh enough"
 	@echo "  pgo-build             - Build release binary with merged PGO profile"
 	@echo "  pgo-benchmark         - Benchmark with profile-use build flags enabled"
+	@echo "  pgo-benchmark-acid    - Benchmark acid mode with profile-use build flags enabled"
 	@echo "  (Use BENCHMARK_VERBOSE=1 for verbose benchmark output)"
 	@echo "  integration-test      - Run full stack integration test (Docker)"
 	@echo "  integration-test-sessions - Run sessions + DB sync test (Docker)"
@@ -120,6 +123,7 @@ BENCHMARK_DIR := /tmp/benchmark-run
 BENCHMARK_VERSION := 0.2.1
 BENCHMARK_PORT := 4437
 BENCHMARK_FILE_STORAGE_DIR := /tmp/benchmark-file-storage
+BENCHMARK_ACID_STORAGE_DIR := /tmp/benchmark-acid-storage
 BENCHMARK_MAX_MEMORY_BYTES ?= 536870912
 BENCHMARK_MAX_STREAM_BYTES ?= 268435456
 BENCHMARK_VERBOSE ?= 0
@@ -173,6 +177,12 @@ benchmark-file: release $(BENCHMARK_DIR)/node_modules
 		$(BENCH_SCRIPT) "file (durable)" localhost $(BENCHMARK_PORT) /healthz file \
 		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable DATA_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
 
+benchmark-acid: release $(BENCHMARK_DIR)/node_modules
+	@rm -rf $(BENCHMARK_ACID_STORAGE_DIR)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "acid (sharded redb)" localhost $(BENCHMARK_PORT) /healthz acid \
+		env PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=acid DATA_DIR=$(BENCHMARK_ACID_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
+
 pgo-clean:
 	@rm -rf $(PGO_DIR)
 
@@ -196,6 +206,14 @@ pgo-train-file: $(BENCHMARK_DIR)/node_modules
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "file (pgo-generate)" localhost $(BENCHMARK_PORT) /healthz pgo-train-file \
 		env RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable DATA_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
+
+pgo-train-acid: $(BENCHMARK_DIR)/node_modules
+	@mkdir -p $(PGO_PROFILE_DIR)
+	@rm -rf $(BENCHMARK_ACID_STORAGE_DIR)
+	@RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" cargo build --release $(CARGO_FEATURES)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "acid (pgo-generate)" localhost $(BENCHMARK_PORT) /healthz pgo-train-acid \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_GEN)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=acid DATA_DIR=$(BENCHMARK_ACID_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
 
 pgo-merge:
 	@test -x "$(LLVM_PROFDATA)" || (echo "Missing llvm-profdata at $(LLVM_PROFDATA)" && exit 1)
@@ -242,6 +260,12 @@ pgo-benchmark-file: pgo-build $(BENCHMARK_DIR)/node_modules
 	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
 		$(BENCH_SCRIPT) "file (pgo-use)" localhost $(BENCHMARK_PORT) /healthz pgo-file \
 		env RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=file-durable DATA_DIR=$(BENCHMARK_FILE_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
+
+pgo-benchmark-acid: pgo-build $(BENCHMARK_DIR)/node_modules
+	@rm -rf $(BENCHMARK_ACID_STORAGE_DIR)
+	@BENCHMARK_DIR=$(BENCHMARK_DIR) BENCHMARK_VITEST_FLAGS="$(BENCHMARK_VITEST_FLAGS)" \
+		$(BENCH_SCRIPT) "acid (pgo-use)" localhost $(BENCHMARK_PORT) /healthz pgo-acid \
+		env RUSTFLAGS="$(PGO_RUSTFLAGS_USE)" PORT=$(BENCHMARK_PORT) MAX_MEMORY_BYTES=$(BENCHMARK_MAX_MEMORY_BYTES) MAX_STREAM_BYTES=$(BENCHMARK_MAX_STREAM_BYTES) STORAGE_MODE=acid DATA_DIR=$(BENCHMARK_ACID_STORAGE_DIR) cargo run --release $(CARGO_FEATURES)
 
 benchmark-node: benchmark-node-memory benchmark-node-file
 	@echo ""
