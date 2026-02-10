@@ -1,0 +1,2 @@
+[log]
+rust_log = "debug"
