@@ -62,10 +62,10 @@ In production with the sync layer, streams are consumed and can be deleted after
 
 ## CORS
 
-The server defaults to `DS_SERVER__CORS_ORIGINS=*` (allow all). For production, restrict to your application's domain:
+The server defaults to `DS_HTTP__CORS_ORIGINS=*` (allow all). For production, restrict to your application's domain:
 
 ```bash
-DS_SERVER__CORS_ORIGINS=https://app.example.com cargo run
+DS_HTTP__CORS_ORIGINS=https://app.example.com cargo run
 ```
 
 Multiple origins can be comma-separated.

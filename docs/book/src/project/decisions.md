@@ -27,7 +27,7 @@ Implementation decisions are recorded in [`docs/decisions.md`](https://github.co
 |----------|-----------|
 | Health check at `/healthz` outside `/v1/stream/` | Health checks are infrastructure, not protocol API |
 | Sessions + bidirectional DB sync replaces Electric-only test | Sessions pattern is the primary production use case |
-| CORS: allow all origins by default, configurable via `DS_SERVER__CORS_ORIGINS` | Not part of protocol semantics; production restricts via env var/proxy |
+| CORS: allow all origins by default, configurable via `DS_HTTP__CORS_ORIGINS` | Not part of protocol semantics; production restricts via env var/proxy |
 
 ## Decision format
 

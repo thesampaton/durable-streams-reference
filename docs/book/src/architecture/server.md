@@ -35,7 +35,7 @@ Key defaults:
 | `DS_SERVER__PORT` | `4437` | Listen port |
 | `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout |
 | `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 to disable) |
-| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `DS_HTTP__CORS_ORIGINS` | `*` | Allowed CORS origins |
 | `DS_STORAGE__MODE` | `memory` | Storage backend selection |
 | `DS_STORAGE__DATA_DIR` | `./data/streams` | Persistent backend root directory |
 

@@ -108,7 +108,7 @@ Environment variables use `DS_` prefix with double-underscore section separators
 | `DS_SERVER__PORT` | `4437` | Server listen port |
 | `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout in seconds |
 | `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval |
-| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `DS_HTTP__CORS_ORIGINS` | `*` | Allowed CORS origins |
 | `DS_LIMITS__MAX_MEMORY_BYTES` | `104857600` | Global in-memory cap |
 | `DS_LIMITS__MAX_STREAM_BYTES` | `10485760` | Per-stream byte cap |
 | `DS_STORAGE__MODE` | `memory` | Storage backend: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`) |
