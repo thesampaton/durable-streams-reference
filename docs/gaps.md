@@ -8,7 +8,7 @@ conservative, and what test would clarify it.
 
 | Ambiguity | Interpretation | Why Conservative | Clarifying Test | Date |
 |-----------|----------------|------------------|-----------------|------|
-| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_RECONNECT_INTERVAL_SECS` env var (0 disables) | Spec says SHOULD close roughly every ~60s. Configurable allows tuning without code changes. Not adding fixed timing that can't be adjusted. | Conformance test that verifies SSE connections close within a window (e.g., 50-70s) after reaching idle at tail | 2026-02-07 |
+| SSE idle close timing (~60s) | Default 60s, configurable via `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` env var (0 disables) | Spec says SHOULD close roughly every ~60s. Configurable allows tuning without code changes. Not adding fixed timing that can't be adjusted. | Conformance test that verifies SSE connections close within a window (e.g., 50-70s) after reaching idle at tail | 2026-02-07 |
 
 ## Gap Entry Format
 
@@ -26,7 +26,7 @@ The entries below illustrate the expected format. They are not active or resolve
 
 | Ambiguity | Interpretation | Why Conservative | Clarifying Test | Date |
 |-----------|----------------|------------------|-----------------|------|
-| _Example:_ CORS not covered by conformance | Allow all origins by default, configurable via `CORS_ORIGINS` env var | Aligns with typical development defaults, restrictable in production. Not adding protocol-level headers that might conflict with future spec. | Test OPTIONS preflight with various Origin headers; verify Access-Control-Allow-* headers | 2026-02-06 |
+| _Example:_ CORS not covered by conformance | Allow all origins by default, configurable via `DS_SERVER__CORS_ORIGINS` env var | Aligns with typical development defaults, restrictable in production. Not adding protocol-level headers that might conflict with future spec. | Test OPTIONS preflight with various Origin headers; verify Access-Control-Allow-* headers | 2026-02-06 |
 | _Example:_ Health check endpoint path | `/healthz` outside `/v1/stream/` namespace | Health checks are infrastructure, not protocol API. Separate namespaces prevent confusion. | N/A - health check is implementation detail | 2026-02-06 |
 
 ## Resolved Gaps

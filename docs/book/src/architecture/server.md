@@ -32,12 +32,12 @@ Key defaults:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `4437` | Listen port |
-| `LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout |
-| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 to disable) |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `STORAGE_MODE` | `memory` | Storage backend selection |
-| `DATA_DIR` | `./data/streams` | Persistent backend root directory |
+| `DS_SERVER__PORT` | `4437` | Listen port |
+| `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | Long-poll timeout |
+| `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval (0 to disable) |
+| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `DS_STORAGE__MODE` | `memory` | Storage backend selection |
+| `DS_STORAGE__DATA_DIR` | `./data/streams` | Persistent backend root directory |
 
 ## Storage backends
 
@@ -62,8 +62,8 @@ SSE responses use `Cache-Control: no-cache` instead of `no-store`.
 
 Two configurable limits prevent unbounded memory growth:
 
-- `MAX_MEMORY_BYTES` (default 100 MB): total memory across all streams
-- `MAX_STREAM_BYTES` (default 10 MB): maximum size per stream
+- `DS_LIMITS__MAX_MEMORY_BYTES` (default 100 MB): total memory across all streams
+- `DS_LIMITS__MAX_STREAM_BYTES` (default 10 MB): maximum size per stream
 
 When limits are exceeded, appends return `413 Payload Too Large`.
 

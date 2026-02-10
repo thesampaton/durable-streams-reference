@@ -1,48 +1,73 @@
 # Configuration
 
-The DS server is configured entirely through environment variables. All have sensible defaults for local development.
+The DS server supports layered TOML configuration plus env-var overrides.
+
+Load order (later wins):
+
+1. built-in defaults
+2. `config/default.toml` (if present)
+3. `config/<profile>.toml` (if present; selected with `--profile`)
+4. `config/local.toml` (if present; intended for local overrides)
+5. `--config <path>` override file
+6. environment variables
+
+CLI options:
+
+| Flag | Description |
+|------|-------------|
+| `--profile <name>` | Loads `config/<name>.toml` |
+| `--config <path>` | Loads an additional TOML file last |
+
+Sample config files in this repo:
+- `config/default.toml` (baseline defaults)
+- `config/dev.toml` (development overrides)
+- `config/prod.toml` (production example)
+
+Example:
+
+```bash
+cargo run -- --profile dev
+cargo run -- --profile prod --config /etc/durable-streams/override.toml
+```
+
+Environment variables use the `DS_` prefix with double-underscore section separators (e.g., `DS_SERVER__PORT`).
 
 ## Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `4437` | TCP port to listen on |
+| `DS_SERVER__PORT` | `4437` | TCP port to listen on |
+| `DS_SERVER__CORS_ORIGINS` | `*` | Allowed CORS origins. `*` allows all. Multiple origins can be comma-separated (e.g., `https://app.example.com,https://admin.example.com`). |
 | `RUST_LOG` | `info` | Log level filter ([tracing](https://docs.rs/tracing-subscriber) format: `debug`, `info`, `warn`, `error`, or per-module like `durable_streams=debug`) |
 
 ## Transport (optional direct TLS)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TLS_CERT_PATH` | _unset_ | Path to PEM certificate for direct TLS termination. Must be set together with `TLS_KEY_PATH`. |
-| `TLS_KEY_PATH` | _unset_ | Path to PEM/PKCS#8 private key for direct TLS termination. Must be set together with `TLS_CERT_PATH`. |
+| `DS_TLS__CERT_PATH` | _unset_ | Path to PEM certificate for direct TLS termination. Must be set together with `DS_TLS__KEY_PATH`. |
+| `DS_TLS__KEY_PATH` | _unset_ | Path to PEM/PKCS#8 private key for direct TLS termination. Must be set together with `DS_TLS__CERT_PATH`. |
 
 ## Protocol
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LONG_POLL_TIMEOUT_SECS` | `30` | How long to hold a long-poll request before returning `204 No Content`. Set lower (e.g., `2`) for fast-feedback testing. |
-| `SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval in seconds (matches Caddy's `sse_reconnect_interval`). Enables CDN request collapsing. Set to `0` to disable. |
+| `DS_SERVER__LONG_POLL_TIMEOUT_SECS` | `30` | How long to hold a long-poll request before returning `204 No Content`. Set lower (e.g., `2`) for fast-feedback testing. |
+| `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` | `60` | SSE reconnect interval in seconds (matches Caddy's `sse_reconnect_interval`). Enables CDN request collapsing. Set to `0` to disable. |
 
 ## Memory limits
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_MEMORY_BYTES` | `104857600` (100 MB) | Maximum total memory across all streams. Appends exceeding this return `413 Payload Too Large`. |
-| `MAX_STREAM_BYTES` | `10485760` (10 MB) | Maximum bytes per individual stream. |
+| `DS_LIMITS__MAX_MEMORY_BYTES` | `104857600` (100 MB) | Maximum total memory across all streams. Appends exceeding this return `413 Payload Too Large`. |
+| `DS_LIMITS__MAX_STREAM_BYTES` | `10485760` (10 MB) | Maximum bytes per individual stream. |
 
 ## Storage
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STORAGE_MODE` | `memory` | Storage backend mode: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`). |
-| `DATA_DIR` | `./data/streams` | Root directory for persistent backends (`file-*`, `acid`). |
-| `ACID_SHARD_COUNT` | `16` | Number of redb shards when `STORAGE_MODE=acid`; must be power-of-2 in `1..=256` (invalid values fall back to `16`). |
-
-## CORS
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CORS_ORIGINS` | `*` | Allowed CORS origins. `*` allows all. Multiple origins can be comma-separated (e.g., `https://app.example.com,https://admin.example.com`). |
+| `DS_STORAGE__MODE` | `memory` | Storage backend mode: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`). |
+| `DS_STORAGE__DATA_DIR` | `./data/streams` | Root directory for persistent backends (`file-*`, `acid`). |
+| `DS_STORAGE__ACID_SHARD_COUNT` | `16` | Number of redb shards when `DS_STORAGE__MODE=acid`; must be power-of-2 in `1..=256` (invalid values fall back to `16`). |
 
 ## Sync service (e2e stack)
 
@@ -58,13 +83,16 @@ These variables configure the sync service container, not the DS server itself:
 
 ```bash
 # Development (fast timeouts for testing)
-LONG_POLL_TIMEOUT_SECS=2 SSE_RECONNECT_INTERVAL_SECS=5 cargo run
+DS_SERVER__LONG_POLL_TIMEOUT_SECS=2 DS_SERVER__SSE_RECONNECT_INTERVAL_SECS=5 cargo run
+
+# Development profile from TOML
+cargo run -- --profile dev
 
 # Production (restricted CORS, custom port)
-PORT=8080 CORS_ORIGINS=https://app.example.com cargo run
+DS_SERVER__PORT=8080 DS_SERVER__CORS_ORIGINS=https://app.example.com cargo run
 
 # Optional direct TLS (proxy->server encryption or direct serving)
-TLS_CERT_PATH=/etc/ds/tls/server.crt TLS_KEY_PATH=/etc/ds/tls/server.key cargo run
+DS_TLS__CERT_PATH=/etc/ds/tls/server.crt DS_TLS__KEY_PATH=/etc/ds/tls/server.key cargo run
 
 # Debug logging
 RUST_LOG=debug cargo run

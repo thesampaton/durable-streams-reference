@@ -6,7 +6,7 @@ Ambiguities and edge cases not fully covered by the protocol spec or conformance
 
 | Ambiguity | Our interpretation |
 |-----------|-------------------|
-| SSE idle close timing (~60s) | Default 60s, configurable via `SSE_RECONNECT_INTERVAL_SECS` (0 disables). Spec says SHOULD close roughly every ~60s. |
+| SSE idle close timing (~60s) | Default 60s, configurable via `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` (0 disables). Spec says SHOULD close roughly every ~60s. |
 
 Gaps are not failures. They are explicit acknowledgments that the implementation operates beyond the spec's current coverage.
 
