@@ -17,7 +17,7 @@ and conformance test suite that this implementation targets.
 
 **Package:** `@durable-streams/server-conformance-tests`
 
-**Version:** `0.2.1`
+**Version:** `0.2.2`
 
 **NPM Registry:** https://www.npmjs.com/package/@durable-streams/server-conformance-tests
 

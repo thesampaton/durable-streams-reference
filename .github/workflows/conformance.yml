@@ -83,7 +83,7 @@ jobs:
           mkdir -p /tmp/conformance-run
           cd /tmp/conformance-run
           npm init -y
-          npm install @durable-streams/server-conformance-tests@0.2.1
+          npm install @durable-streams/server-conformance-tests@0.2.2
           cat > conformance.test.mjs << 'TESTEOF'
           import { runConformanceTests } from "@durable-streams/server-conformance-tests";
           runConformanceTests({ baseUrl: process.env.CONFORMANCE_TEST_URL, longPollTimeoutMs: 2000 });

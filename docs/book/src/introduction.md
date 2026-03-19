@@ -32,4 +32,4 @@ Together they implement the *durable sessions* pattern: real-time collaborative 
 
 ## Conformance
 
-This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.1`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md). All 239 conformance tests pass.
+This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.2`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md). All 239 conformance tests pass.
