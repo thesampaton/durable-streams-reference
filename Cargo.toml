@@ -1,6 +1,6 @@
 [package]
 name = "durable-streams-reference"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [lints.clippy]
@@ -8,7 +8,7 @@ pedantic = { level = "warn", priority = -1 }
 
 # Spec versions implemented:
 # - Spec SHA: a347312a47ae510a4a2e3ee7a121d6c8d7d74e50
-# - Conformance: 0.2.1
+# - Conformance: 0.2.2
 
 [dependencies]
 axum = { version = "0.8.8", features = ["macros"] }

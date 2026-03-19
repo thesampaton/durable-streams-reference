@@ -93,7 +93,7 @@ test-integration:
 # Requires: node, npm
 # On first run, installs the conformance harness to /tmp/conformance-run
 CONFORMANCE_DIR := /tmp/conformance-run
-CONFORMANCE_VERSION := 0.2.1
+CONFORMANCE_VERSION := 0.2.2
 
 $(CONFORMANCE_DIR)/node_modules: $(CONFORMANCE_DIR)/package.json
 	cd $(CONFORMANCE_DIR) && npm install

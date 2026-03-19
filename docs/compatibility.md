@@ -8,14 +8,15 @@ and any behaviour differences or breaking changes.
 | Spec SHA | Server Version | Status | Notes | Breaking Changes |
 |----------|----------------|--------|-------|------------------|
 | a347312a47ae510a4a2e3ee7a121d6c8d7d74e50 | 0.1.0 | Complete | Full conformance with @durable-streams/server-conformance-tests@0.2.1 | N/A |
+| a347312a47ae510a4a2e3ee7a121d6c8d7d74e50 | 0.1.1 | Complete | Full conformance with @durable-streams/server-conformance-tests@0.2.2 | N/A |
 
 ## Current Implementation
 
-**Server Version:** 0.1.0
+**Server Version:** 0.1.1
 
 **Spec SHA:** a347312a47ae510a4a2e3ee7a121d6c8d7d74e50
 
-**Conformance Version:** 0.2.1
+**Conformance Version:** 0.2.2
 
 **Status:** Fully conformant. All 239 conformance tests pass.
 
