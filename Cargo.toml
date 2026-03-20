@@ -1,5 +1,5 @@
 [package]
-name = "durable-streams-rust-server"
+name = "durable-streams-server"
 version = "0.1.1"
 edition = "2024"
 description = "Durable Streams protocol server in Rust, built with axum and tokio"

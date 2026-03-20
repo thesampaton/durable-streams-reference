@@ -2,10 +2,10 @@ mod common;
 
 use bytes::Bytes;
 use common::{StorageTestBackend, create_test_storage, create_test_storage_with_limits};
-use durable_streams_rust_server::protocol::error::Error;
-use durable_streams_rust_server::protocol::offset::Offset;
-use durable_streams_rust_server::protocol::producer::ProducerHeaders;
-use durable_streams_rust_server::storage::{
+use durable_streams_server::protocol::error::Error;
+use durable_streams_server::protocol::offset::Offset;
+use durable_streams_server::protocol::producer::ProducerHeaders;
+use durable_streams_server::storage::{
     CreateStreamResult, ProducerAppendResult, Storage, StreamConfig,
 };
 use std::panic::{AssertUnwindSafe, RefUnwindSafe, catch_unwind};

@@ -1,5 +1,5 @@
 use axum_server::{Handle, tls_rustls::RustlsConfig};
-use durable_streams_rust_server::{
+use durable_streams_server::{
     config::{Config, ConfigLoadOptions, StorageMode},
     router,
     storage::{Storage, acid::AcidStorage, file::FileStorage, memory::InMemoryStorage},
@@ -59,7 +59,7 @@ impl CliArgs {
 }
 
 fn print_usage() {
-    eprintln!("Usage: durable-streams-rust-server [--profile <name>] [--config <path>]");
+    eprintln!("Usage: durable-streams-server [--profile <name>] [--config <path>]");
     eprintln!("  --profile <name>  Loads config/<name>.toml after config/default.toml");
     eprintln!("  --config <path>   Loads an extra TOML override file last");
 }

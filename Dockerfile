@@ -18,7 +18,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release
 # Stage 2: Runtime
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /build/target/release/durable-streams-rust-server /durable-streams-server
+COPY --from=builder /build/target/release/durable-streams-server /durable-streams-server
 
 EXPOSE 4437
 
