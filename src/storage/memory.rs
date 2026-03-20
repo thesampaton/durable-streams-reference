@@ -575,9 +575,6 @@ mod tests {
         }
 
         let metadata = storage.head("test").unwrap();
-        assert_eq!(
-            metadata.message_count,
-            num_producers * seqs_per_producer
-        );
+        assert_eq!(metadata.message_count, num_producers * seqs_per_producer);
     }
 }
