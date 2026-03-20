@@ -137,4 +137,5 @@ Environment variables use `DS_` prefix with double-underscore section separators
 | `DS_STORAGE__ACID_SHARD_COUNT` | `16` | Number of redb shards for acid mode (power-of-2, `1..=256`) |
 | `DS_TLS__CERT_PATH` | _(unset)_ | Optional PEM certificate path for direct TLS termination (requires `DS_TLS__KEY_PATH`) |
 | `DS_TLS__KEY_PATH` | _(unset)_ | Optional PEM/PKCS#8 key path for direct TLS termination (requires `DS_TLS__CERT_PATH`) |
-| `RUST_LOG` | `info` | Log level filter (standard tracing env var) |
+| `DS_LOG__RUST_LOG` | `info` | Default log level filter (via TOML config layer) |
+| `RUST_LOG` | `info` | Log level filter (standard tracing env var, takes precedence over `DS_LOG__RUST_LOG`) |
