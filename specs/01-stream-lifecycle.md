@@ -14,12 +14,12 @@ Defines stream lifecycle operations: creation (PUT), deletion (DELETE), and meta
 **Method:** `PUT /v1/stream/{name}`
 
 **Headers:**
-- `Content-Type` (required): Stream content type (e.g., `text/plain`, `application/json`)
+- `Content-Type` (optional): Stream content type (e.g., `text/plain`, `application/json`). Defaults to `application/octet-stream` if omitted.
 - `Stream-TTL` (optional): Time-to-live in seconds (integer, no leading zeros)
 - `Stream-Expires-At` (optional): Absolute expiration timestamp (ISO 8601)
 - `Stream-Closed` (optional): If `"true"`, create stream in closed state
 
-**Body:** MUST be empty. PUT with body MUST return 400.
+**Body:** Optional. If provided, the body is appended as initial stream data.
 
 ### Response
 
@@ -36,8 +36,7 @@ Defines stream lifecycle operations: creation (PUT), deletion (DELETE), and meta
 **400 Bad Request** - Invalid request:
 - Both TTL and Expires-At provided
 - Invalid TTL format (leading zeros, floats, scientific notation, negative)
-- Empty or missing Content-Type
-- Non-empty request body
+- Empty Content-Type header (when explicitly provided)
 
 ### Behavior
 
