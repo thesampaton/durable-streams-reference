@@ -415,7 +415,7 @@ async fn test_read_closed_stream_at_tail() {
 
 /// Validates spec: 03-read-modes.md#etag-and-caching
 ///
-/// Verifies that If-None-Match returns 304 when ETag matches.
+/// Verifies that If-None-Match returns 304 when `ETag` matches.
 #[tokio::test]
 async fn test_if_none_match_returns_304() {
     let (base_url, _port) = spawn_test_server().await;
@@ -509,8 +509,8 @@ async fn test_invalid_offset_returns_400() {
 
 /// Regression test: Verifies response headers match body snapshot under concurrent appends
 ///
-/// This test prevents reintroduction of a bug where calling storage.head() after
-/// storage.read() could return offsets from a newer snapshot than the body,
+/// This test prevents reintroduction of a bug where calling `storage.head()` after
+/// `storage.read()` could return offsets from a newer snapshot than the body,
 /// breaking resumable reads when a concurrent append lands between the calls.
 #[tokio::test]
 async fn test_response_headers_match_body_snapshot() {

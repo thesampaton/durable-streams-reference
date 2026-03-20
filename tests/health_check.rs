@@ -12,7 +12,7 @@ async fn test_health_check() {
     let client = test_client();
 
     let response = client
-        .get(format!("{}/healthz", base_url))
+        .get(format!("{base_url}/healthz"))
         .send()
         .await
         .expect("Failed to send health check request");
@@ -34,14 +34,13 @@ async fn test_server_starts() {
 
     // Verify server is accessible
     let response = client
-        .get(format!("{}/healthz", base_url))
+        .get(format!("{base_url}/healthz"))
         .send()
         .await
         .expect("Failed to connect to server");
 
     assert!(
         response.status().is_success(),
-        "Server should respond successfully on port {}",
-        port
+        "Server should respond successfully on port {port}",
     );
 }

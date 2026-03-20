@@ -1,5 +1,6 @@
 mod common;
 
+use base64::Engine;
 use common::{spawn_test_server, test_client_with_timeout, unique_stream_name};
 use std::time::Duration;
 
@@ -34,8 +35,8 @@ fn parse_sse_events(text: &str) -> Vec<SseEvent> {
             current_type = value.trim().to_string();
         } else if let Some(value) = line.strip_prefix("data:") {
             // SSE spec: if there's a space after "data:", skip it
-            let trimmed = if value.starts_with(' ') {
-                &value[1..]
+            let trimmed = if let Some(stripped) = value.strip_prefix(' ') {
+                stripped
             } else {
                 value
             };
@@ -576,7 +577,6 @@ async fn test_sse_binary_base64_encoding() {
     assert!(!data_events.is_empty(), "Expected data events");
 
     // Decode and verify
-    use base64::Engine;
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&data_events[0].data)
         .expect("Data should be valid base64");

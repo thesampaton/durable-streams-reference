@@ -302,10 +302,10 @@ async fn test_close_with_non_true_value_ignored() {
 /// Note: The server returns all messages from the requested offset to
 /// the end of the stream in a single response — pagination is the
 /// client's responsibility (resume from Stream-Next-Offset). Because
-/// of this, at_tail is always true for data reads, so a true
-/// "mid-stream on closed" scenario (at_tail=false, closed=true) cannot
+/// of this, `at_tail` is always true for data reads, so a true
+/// "mid-stream on closed" scenario (`at_tail=false`, `closed=true`) cannot
 /// occur at the HTTP layer. This test covers the `closed` guard
-/// dimension instead: at_tail=true, closed=false → no Stream-Closed.
+/// dimension instead: `at_tail=true`, `closed=false` -> no Stream-Closed.
 #[tokio::test]
 async fn test_read_open_stream_omits_closed_header() {
     let (base_url, _port) = spawn_test_server().await;
