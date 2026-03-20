@@ -38,7 +38,8 @@ Environment variables use the `DS_` prefix with double-underscore section separa
 |----------|---------|-------------|
 | `DS_SERVER__PORT` | `4437` | TCP port to listen on |
 | `DS_HTTP__CORS_ORIGINS` | `*` | Allowed CORS origins. `*` allows all. Multiple origins can be comma-separated (e.g., `https://app.example.com,https://admin.example.com`). |
-| `RUST_LOG` | `info` | Log level filter ([tracing](https://docs.rs/tracing-subscriber) format: `debug`, `info`, `warn`, `error`, or per-module like `durable_streams=debug`) |
+| `RUST_LOG` | `info` | Log level filter ([tracing](https://docs.rs/tracing-subscriber) format: `debug`, `info`, `warn`, `error`, or per-module like `durable_streams=debug`). Takes precedence over `DS_LOG__RUST_LOG`. |
+| `DS_LOG__RUST_LOG` | `info` | Default log level filter, applied through the TOML config layer. Overridden by `RUST_LOG` when both are set. |
 
 ## Transport (optional direct TLS)
 
@@ -67,7 +68,7 @@ Environment variables use the `DS_` prefix with double-underscore section separa
 |----------|---------|-------------|
 | `DS_STORAGE__MODE` | `memory` | Storage backend mode: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`). |
 | `DS_STORAGE__DATA_DIR` | `./data/streams` | Root directory for persistent backends (`file-*`, `acid`). |
-| `DS_STORAGE__ACID_SHARD_COUNT` | `16` | Number of redb shards when `DS_STORAGE__MODE=acid`; must be power-of-2 in `1..=256` (invalid values fall back to `16`). |
+| `DS_STORAGE__ACID_SHARD_COUNT` | `16` | Number of redb shards when `DS_STORAGE__MODE=acid`; must be power-of-2 in `1..=256` (invalid values return an error). |
 
 ## Sync service (e2e stack)
 

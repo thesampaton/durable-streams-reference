@@ -26,7 +26,7 @@ The durable streams server is the core component. It implements the [durable str
 
 ## Configuration
 
-The server is configured entirely through environment variables. See [Configuration](../reference/configuration.md) for the full list.
+The server is configured through layered TOML files and environment variables. See [Configuration](../reference/configuration.md) for the full list.
 
 Key defaults:
 

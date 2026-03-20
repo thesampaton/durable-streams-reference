@@ -10,7 +10,7 @@ curl -i -X PUT -H "Content-Type: text/plain" \
 ```
 
 **Headers:**
-- `Content-Type` (required): the stream's content type, fixed at creation
+- `Content-Type` (optional): the stream's content type, fixed at creation. Defaults to `application/octet-stream` if omitted
 - `Stream-TTL` (optional): time-to-live in seconds
 - `Stream-Expires-At` (optional): absolute expiration (ISO 8601)
 - `Stream-Closed` (optional): `"true"` to create in closed state
@@ -19,7 +19,7 @@ curl -i -X PUT -H "Content-Type: text/plain" \
 - `201 Created` with `Location`, `Content-Type`, `Stream-Next-Offset`
 - `200 OK` if the stream already exists with the same configuration (idempotent)
 - `409 Conflict` if the stream exists with different configuration
-- `400 Bad Request` for invalid TTL, missing Content-Type, or non-empty body
+- `400 Bad Request` for invalid TTL or empty Content-Type header
 
 The Content-Type is immutable after creation. Comparison is case-insensitive and ignores charset parameters.
 

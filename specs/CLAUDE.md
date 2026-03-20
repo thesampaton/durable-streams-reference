@@ -22,7 +22,6 @@ Each spec document describes one discrete capability:
 - `01-stream-lifecycle.md` — create, delete, metadata (PUT, DELETE, HEAD)
 - `02-append-semantics.md` — appending data (POST)
 - `03-read-modes.md` — catch-up, long-poll, SSE (GET with modes)
-- `04-offset-semantics.md` — offset format, validation, resumption
 - `05-producer-sequencing.md` — idempotent producers, epoch fencing
 - `06-json-mode.md` — JSON array flattening
 - `07-caching-etag.md` — ETag generation, If-None-Match, Cache-Control

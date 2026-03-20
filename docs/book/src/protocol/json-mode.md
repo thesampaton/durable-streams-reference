@@ -72,7 +72,7 @@ const parsed = JSON.parse(data);
 const items = Array.isArray(parsed) ? parsed : [parsed];
 ```
 
-See [ecosystem interop CI-003](../project/gaps.md) for details on this pattern.
+See [ecosystem interop CI-003](../project/gaps.md#ecosystem-interop-observations) for details on this pattern.
 
 ## Non-JSON streams
 

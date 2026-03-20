@@ -13,7 +13,7 @@ This file governs all code in `src/`. Violations should be caught by clippy or c
 ## Offset Invariants (Critical)
 
 - Offsets MUST be monotonically increasing within a stream.
-- Offset format: `{read_seq:016}_{byte_offset:016}` (zero-padded hex).
+- Offset format: `{read_seq:016x}_{byte_offset:016x}` (zero-padded hex).
 - Sentinels: `-1` (stream start), `now` (tail/live).
 - Lexicographic ordering equals temporal ordering.
 - Concurrent appends MUST be serialized per-stream to maintain monotonicity.
