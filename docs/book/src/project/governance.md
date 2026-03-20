@@ -1,6 +1,6 @@
 # Protocol governance
 
-This implementation strictly adheres to the durable streams protocol specification. This page summarizes the governance policies defined in full in [`docs/protocol-governance.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/protocol-governance.md).
+This implementation strictly adheres to the durable streams protocol specification. This page summarizes the governance policies defined in full in [`docs/protocol-governance.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/protocol-governance.md).
 
 ## Default stance
 
@@ -17,7 +17,7 @@ This implementation strictly adheres to the durable streams protocol specificati
 
 ## Spec pinning
 
-The protocol spec is pinned by git commit SHA, not by branch. The conformance test suite is pinned by npm package version. See [`SPEC_VERSION.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/SPEC_VERSION.md) for current pins:
+The protocol spec is pinned by git commit SHA, not by branch. The conformance test suite is pinned by npm package version. See [`SPEC_VERSION.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/SPEC_VERSION.md) for current pins:
 
 - **Spec SHA:** `a347312a47ae510a4a2e3ee7a121d6c8d7d74e50`
 - **Conformance:** `@durable-streams/server-conformance-tests@0.2.2`
@@ -27,7 +27,7 @@ The protocol spec is pinned by git commit SHA, not by branch. The conformance te
 Every externally observable behavior (paths, headers, status codes, framing) must link to:
 - A spec section URL with anchor, or
 - A conformance test that asserts it, or
-- An explicit gap in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/gaps.md)
+- An explicit gap in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/gaps.md)
 
 ## Conservative fallback rules
 
