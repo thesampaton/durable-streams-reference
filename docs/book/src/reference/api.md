@@ -20,19 +20,19 @@ PUT /v1/stream/{name}
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `Content-Type` | yes | Stream content type (immutable after creation) |
+| `Content-Type` | no | Stream content type (immutable after creation; defaults to `application/octet-stream`) |
 | `Stream-TTL` | no | Time-to-live in seconds |
 | `Stream-Expires-At` | no | Absolute expiration (ISO 8601) |
 | `Stream-Closed` | no | `"true"` to create closed |
 
-Body must be empty.
+Body is optional. If provided, it is appended as initial stream data.
 
 | Status | Meaning |
 |--------|---------|
 | `201 Created` | Stream created |
 | `200 OK` | Idempotent create (same config) |
 | `409 Conflict` | Stream exists with different config |
-| `400 Bad Request` | Invalid TTL, missing Content-Type, non-empty body |
+| `400 Bad Request` | Invalid TTL or empty Content-Type header |
 
 **Response headers:** `Location`, `Content-Type`, `Stream-Next-Offset`
 

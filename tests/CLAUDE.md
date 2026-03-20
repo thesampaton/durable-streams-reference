@@ -45,7 +45,7 @@ scaffolding. The external conformance suite is the ultimate acceptance gate.
 
 ### External Conformance Suite (ultimate gate)
 
-- `@durable-streams/server-conformance-tests` on npm (~195 tests).
+- `@durable-streams/server-conformance-tests@0.2.2` on npm (239 tests).
 - These are the acceptance tests. If we pass all of these, we conform.
 - Run with `make conformance` or `npx @durable-streams/server-conformance-tests`.
 - Our Rust integration tests exist to provide faster feedback during development.
@@ -68,9 +68,9 @@ This ensures the same test expectations could validate any implementation of the
 ## Test Structure
 
 Each integration test file corresponds to a spec document:
-- `tests/stream_lifecycle.rs` → `specs/01-stream-lifecycle.md`
-- `tests/append_semantics.rs` → `specs/02-append-semantics.md`
-- `tests/read_modes.rs` → `specs/03-read-modes.md`
+- `tests/stream_creation.rs` → `specs/01-stream-lifecycle.md`
+- `tests/append_operations.rs` → `specs/02-append-semantics.md`
+- `tests/read_operations.rs` → `specs/03-read-modes.md`
 
 Within each file, test functions reference specific sections:
 ```rust
@@ -82,10 +82,10 @@ async fn test_create_stream() { ... }
 ## Test Helpers (`tests/common/mod.rs`)
 
 Common test utilities:
-- `spawn_test_server() -> (Server, u16)` — start server on random port
-- `test_client(port: u16) -> Client` — HTTP client with base URL
+- `spawn_test_server() -> (String, u16)` — start server on random port, returns `(base_url, port)`
+- `test_client() -> reqwest::Client` — HTTP client (no arguments)
+- `test_client_with_timeout(Duration) -> reqwest::Client` — HTTP client with custom timeout
 - `unique_stream_name() -> String` — generate unique stream names to avoid collisions
-- `shutdown_server(server: Server)` — clean shutdown
 
 Keep helpers focused. Don't build a framework. Just reduce duplication.
 

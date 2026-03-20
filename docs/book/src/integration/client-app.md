@@ -50,7 +50,7 @@ for await (const item of res.subscribeJson()) {
 }
 ```
 
-See [ecosystem interop CI-001](../project/gaps.md) for why this hint is necessary.
+See [ecosystem interop CI-001](../project/gaps.md#ecosystem-interop-observations) for why this hint is necessary.
 
 ## Using plain fetch
 

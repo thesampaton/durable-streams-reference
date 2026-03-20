@@ -22,7 +22,7 @@ and any behaviour differences or breaking changes.
 
 ## Conformance Coverage
 
-As of 2026-02-09:
+As of 2026-03-20:
 - Passing: 239/239 tests
 
 ## Known Limitations
