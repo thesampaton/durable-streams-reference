@@ -1,8 +1,8 @@
+use axum::http::HeaderValue;
 use figment::{
     Figment,
     providers::{Format, Toml},
 };
-use axum::http::HeaderValue;
 use serde::Deserialize;
 use std::env;
 use std::path::PathBuf;
@@ -277,30 +277,30 @@ impl Config {
         if let Some(port) = get("DS_SERVER__PORT") {
             self.port = port
                 .parse()
-                .map_err(|_| "invalid DS_SERVER__PORT value".to_string())?;
+                .map_err(|_| format!("invalid DS_SERVER__PORT value: '{port}'"))?;
         }
         if let Some(long_poll_timeout_secs) = get("DS_SERVER__LONG_POLL_TIMEOUT_SECS") {
             self.long_poll_timeout = Duration::from_secs(
                 long_poll_timeout_secs
                     .parse()
-                    .map_err(|_| "invalid DS_SERVER__LONG_POLL_TIMEOUT_SECS value".to_string())?,
+                    .map_err(|_| format!("invalid DS_SERVER__LONG_POLL_TIMEOUT_SECS value: '{long_poll_timeout_secs}'"))?,
             );
         }
         if let Some(sse_reconnect_interval_secs) = get("DS_SERVER__SSE_RECONNECT_INTERVAL_SECS") {
             self.sse_reconnect_interval_secs = sse_reconnect_interval_secs.parse().map_err(|_| {
-                "invalid DS_SERVER__SSE_RECONNECT_INTERVAL_SECS value".to_string()
+                format!("invalid DS_SERVER__SSE_RECONNECT_INTERVAL_SECS value: '{sse_reconnect_interval_secs}'")
             })?;
         }
 
         if let Some(max_memory_bytes) = get("DS_LIMITS__MAX_MEMORY_BYTES") {
-            self.max_memory_bytes = max_memory_bytes
-                .parse()
-                .map_err(|_| "invalid DS_LIMITS__MAX_MEMORY_BYTES value".to_string())?;
+            self.max_memory_bytes = max_memory_bytes.parse().map_err(|_| {
+                format!("invalid DS_LIMITS__MAX_MEMORY_BYTES value: '{max_memory_bytes}'")
+            })?;
         }
         if let Some(max_stream_bytes) = get("DS_LIMITS__MAX_STREAM_BYTES") {
-            self.max_stream_bytes = max_stream_bytes
-                .parse()
-                .map_err(|_| "invalid DS_LIMITS__MAX_STREAM_BYTES value".to_string())?;
+            self.max_stream_bytes = max_stream_bytes.parse().map_err(|_| {
+                format!("invalid DS_LIMITS__MAX_STREAM_BYTES value: '{max_stream_bytes}'")
+            })?;
         }
 
         if let Some(cors_origins) = get("DS_HTTP__CORS_ORIGINS") {
@@ -317,9 +317,9 @@ impl Config {
         }
 
         if let Some(acid_shard_count) = get("DS_STORAGE__ACID_SHARD_COUNT") {
-            let parsed = acid_shard_count
-                .parse::<usize>()
-                .map_err(|_| "invalid DS_STORAGE__ACID_SHARD_COUNT value".to_string())?;
+            let parsed = acid_shard_count.parse::<usize>().map_err(|_| {
+                format!("invalid DS_STORAGE__ACID_SHARD_COUNT value: '{acid_shard_count}'")
+            })?;
             if !Self::valid_acid_shard_count(parsed) {
                 return Err(format!(
                     "invalid DS_STORAGE__ACID_SHARD_COUNT value: '{acid_shard_count}' (must be power-of-two in 1..=256)"
@@ -348,7 +348,7 @@ impl Config {
     ///
     /// Returns an error string when config is internally inconsistent.
     pub fn validate(&self) -> std::result::Result<(), String> {
-        let tls_pair_result = match (&self.tls_cert_path, &self.tls_key_path) {
+        match (&self.tls_cert_path, &self.tls_key_path) {
             (Some(_), Some(_)) | (None, None) => Ok(()),
             (Some(_), None) => Err(
                 "tls.cert_path is set but tls.key_path is missing; both must be set together"
@@ -358,8 +358,7 @@ impl Config {
                 "tls.key_path is set but tls.cert_path is missing; both must be set together"
                     .to_string(),
             ),
-        };
-        tls_pair_result?;
+        }?;
 
         Self::validate_cors_origins(&self.cors_origins)?;
 
@@ -382,7 +381,9 @@ impl Config {
         }
 
         if !parsed_any {
-            return Err("http.cors_origins must be '*' or a non-empty comma-separated list".to_string());
+            return Err(
+                "http.cors_origins must be '*' or a non-empty comma-separated list".to_string(),
+            );
         }
 
         Ok(())
@@ -506,7 +507,9 @@ mod tests {
             ("DS_TLS__KEY_PATH", "/tmp/key.pem"),
             ("DS_LOG__RUST_LOG", "debug"),
         ]);
-        config.apply_env_overrides(&get).expect("apply env overrides");
+        config
+            .apply_env_overrides(&get)
+            .expect("apply env overrides");
         assert_eq!(config.port, 8080);
         assert_eq!(config.max_memory_bytes, 200_000_000);
         assert_eq!(config.max_stream_bytes, 20_000_000);
@@ -532,7 +535,7 @@ mod tests {
         let err = config
             .apply_env_overrides(&get)
             .expect_err("invalid env override should fail");
-        assert_eq!(err, "invalid DS_SERVER__PORT value");
+        assert_eq!(err, "invalid DS_SERVER__PORT value: 'not-a-number'");
         assert_eq!(config.port, 4437);
         assert_eq!(config.max_memory_bytes, 100 * 1024 * 1024);
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
@@ -542,7 +545,9 @@ mod tests {
     fn test_env_overrides_partial() {
         let mut config = Config::default();
         let get = lookup(&[("DS_SERVER__PORT", "9090")]);
-        config.apply_env_overrides(&get).expect("apply env overrides");
+        config
+            .apply_env_overrides(&get)
+            .expect("apply env overrides");
         assert_eq!(config.port, 9090);
         // Everything else stays at defaults
         assert_eq!(config.storage_mode, StorageMode::Memory);
@@ -719,7 +724,7 @@ mod tests {
         let err = config
             .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "abc")]))
             .expect_err("invalid shard count should fail");
-        assert_eq!(err, "invalid DS_STORAGE__ACID_SHARD_COUNT value");
+        assert_eq!(err, "invalid DS_STORAGE__ACID_SHARD_COUNT value: 'abc'");
         assert_eq!(config.acid_shard_count, 16);
     }
 
@@ -739,7 +744,9 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(
-            config.validate().expect_err("invalid cors origins should fail"),
+            config
+                .validate()
+                .expect_err("invalid cors origins should fail"),
             "http.cors_origins contains an empty origin entry"
         );
     }
