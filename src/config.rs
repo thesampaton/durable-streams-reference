@@ -2,6 +2,7 @@ use figment::{
     Figment,
     providers::{Format, Toml},
 };
+use axum::http::HeaderValue;
 use serde::Deserialize;
 use std::env;
 use std::path::PathBuf;
@@ -150,11 +151,13 @@ impl Config {
     /// Load configuration from `DS_*` environment variables with sensible defaults.
     ///
     /// Used by tests and as a simple entry point when TOML layering is not needed.
-    #[must_use]
-    pub fn from_env() -> Self {
+    /// # Errors
+    ///
+    /// Returns an error when any `DS_*` environment variable is present but invalid.
+    pub fn from_env() -> Result<Self, String> {
         let mut config = Self::default();
-        config.apply_env_overrides(&|key| env::var(key).ok());
-        config
+        config.apply_env_overrides(&|key| env::var(key).ok())?;
+        Ok(config)
     }
 
     /// Load configuration from layered TOML files plus environment overrides.
@@ -214,7 +217,7 @@ impl Config {
             .map_err(|e| format!("failed to parse TOML config: {e}"))?;
 
         let mut config = Self::apply_file_settings(settings)?;
-        config.apply_env_overrides(get);
+        config.apply_env_overrides(get)?;
         Ok(config)
     }
 
@@ -270,51 +273,59 @@ impl Config {
     }
 
     /// Apply `DS_*` environment variable overrides on top of current config.
-    fn apply_env_overrides(&mut self, get: &impl Fn(&str) -> Option<String>) {
-        if let Some(port) = get("DS_SERVER__PORT").and_then(|v| v.parse().ok()) {
-            self.port = port;
+    fn apply_env_overrides(&mut self, get: &impl Fn(&str) -> Option<String>) -> Result<(), String> {
+        if let Some(port) = get("DS_SERVER__PORT") {
+            self.port = port
+                .parse()
+                .map_err(|_| "invalid DS_SERVER__PORT value".to_string())?;
         }
-        if let Some(long_poll_timeout_secs) =
-            get("DS_SERVER__LONG_POLL_TIMEOUT_SECS").and_then(|v| v.parse().ok())
-        {
-            self.long_poll_timeout = Duration::from_secs(long_poll_timeout_secs);
+        if let Some(long_poll_timeout_secs) = get("DS_SERVER__LONG_POLL_TIMEOUT_SECS") {
+            self.long_poll_timeout = Duration::from_secs(
+                long_poll_timeout_secs
+                    .parse()
+                    .map_err(|_| "invalid DS_SERVER__LONG_POLL_TIMEOUT_SECS value".to_string())?,
+            );
         }
-        if let Some(sse_reconnect_interval_secs) =
-            get("DS_SERVER__SSE_RECONNECT_INTERVAL_SECS").and_then(|v| v.parse().ok())
-        {
-            self.sse_reconnect_interval_secs = sse_reconnect_interval_secs;
+        if let Some(sse_reconnect_interval_secs) = get("DS_SERVER__SSE_RECONNECT_INTERVAL_SECS") {
+            self.sse_reconnect_interval_secs = sse_reconnect_interval_secs.parse().map_err(|_| {
+                "invalid DS_SERVER__SSE_RECONNECT_INTERVAL_SECS value".to_string()
+            })?;
         }
 
-        if let Some(max_memory_bytes) =
-            get("DS_LIMITS__MAX_MEMORY_BYTES").and_then(|v| v.parse().ok())
-        {
-            self.max_memory_bytes = max_memory_bytes;
+        if let Some(max_memory_bytes) = get("DS_LIMITS__MAX_MEMORY_BYTES") {
+            self.max_memory_bytes = max_memory_bytes
+                .parse()
+                .map_err(|_| "invalid DS_LIMITS__MAX_MEMORY_BYTES value".to_string())?;
         }
-        if let Some(max_stream_bytes) =
-            get("DS_LIMITS__MAX_STREAM_BYTES").and_then(|v| v.parse().ok())
-        {
-            self.max_stream_bytes = max_stream_bytes;
+        if let Some(max_stream_bytes) = get("DS_LIMITS__MAX_STREAM_BYTES") {
+            self.max_stream_bytes = max_stream_bytes
+                .parse()
+                .map_err(|_| "invalid DS_LIMITS__MAX_STREAM_BYTES value".to_string())?;
         }
 
         if let Some(cors_origins) = get("DS_HTTP__CORS_ORIGINS") {
             self.cors_origins = cors_origins;
         }
 
-        if let Some(storage_mode) =
-            get("DS_STORAGE__MODE").and_then(|v| Self::parse_storage_mode_value(&v))
-        {
-            self.storage_mode = storage_mode;
+        if let Some(storage_mode) = get("DS_STORAGE__MODE") {
+            self.storage_mode = Self::parse_storage_mode_value(&storage_mode)
+                .ok_or_else(|| format!("invalid DS_STORAGE__MODE value: '{storage_mode}'"))?;
         }
 
         if let Some(data_dir) = get("DS_STORAGE__DATA_DIR") {
             self.data_dir = data_dir;
         }
 
-        if let Some(acid_shard_count) = get("DS_STORAGE__ACID_SHARD_COUNT")
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|v| Self::valid_acid_shard_count(*v))
-        {
-            self.acid_shard_count = acid_shard_count;
+        if let Some(acid_shard_count) = get("DS_STORAGE__ACID_SHARD_COUNT") {
+            let parsed = acid_shard_count
+                .parse::<usize>()
+                .map_err(|_| "invalid DS_STORAGE__ACID_SHARD_COUNT value".to_string())?;
+            if !Self::valid_acid_shard_count(parsed) {
+                return Err(format!(
+                    "invalid DS_STORAGE__ACID_SHARD_COUNT value: '{acid_shard_count}' (must be power-of-two in 1..=256)"
+                ));
+            }
+            self.acid_shard_count = parsed;
         }
 
         if let Some(cert_path) = get("DS_TLS__CERT_PATH") {
@@ -327,6 +338,8 @@ impl Config {
         if let Some(rust_log) = get("DS_LOG__RUST_LOG") {
             self.rust_log = rust_log;
         }
+
+        Ok(())
     }
 
     /// Validate configuration invariants before server startup.
@@ -335,7 +348,7 @@ impl Config {
     ///
     /// Returns an error string when config is internally inconsistent.
     pub fn validate(&self) -> std::result::Result<(), String> {
-        match (&self.tls_cert_path, &self.tls_key_path) {
+        let tls_pair_result = match (&self.tls_cert_path, &self.tls_key_path) {
             (Some(_), Some(_)) | (None, None) => Ok(()),
             (Some(_), None) => Err(
                 "tls.cert_path is set but tls.key_path is missing; both must be set together"
@@ -345,7 +358,34 @@ impl Config {
                 "tls.key_path is set but tls.cert_path is missing; both must be set together"
                     .to_string(),
             ),
+        };
+        tls_pair_result?;
+
+        Self::validate_cors_origins(&self.cors_origins)?;
+
+        Ok(())
+    }
+
+    fn validate_cors_origins(origins: &str) -> Result<(), String> {
+        if origins == "*" {
+            return Ok(());
         }
+
+        let mut parsed_any = false;
+        for origin in origins.split(',').map(str::trim) {
+            if origin.is_empty() {
+                return Err("http.cors_origins contains an empty origin entry".to_string());
+            }
+            HeaderValue::from_str(origin)
+                .map_err(|_| format!("invalid http.cors_origins entry: '{origin}'"))?;
+            parsed_any = true;
+        }
+
+        if !parsed_any {
+            return Err("http.cors_origins must be '*' or a non-empty comma-separated list".to_string());
+        }
+
+        Ok(())
     }
 
     /// True when direct TLS termination is enabled on this server.
@@ -443,7 +483,7 @@ mod tests {
     #[test]
     fn test_from_env_uses_defaults_when_no_ds_vars() {
         // from_env reads real env; in test context no DS_* vars are set
-        let config = Config::from_env();
+        let config = Config::from_env().expect("config from env");
         assert_eq!(config.port, 4437);
         assert_eq!(config.storage_mode, StorageMode::Memory);
         assert_eq!(config.rust_log, "info");
@@ -466,7 +506,7 @@ mod tests {
             ("DS_TLS__KEY_PATH", "/tmp/key.pem"),
             ("DS_LOG__RUST_LOG", "debug"),
         ]);
-        config.apply_env_overrides(&get);
+        config.apply_env_overrides(&get).expect("apply env overrides");
         assert_eq!(config.port, 8080);
         assert_eq!(config.max_memory_bytes, 200_000_000);
         assert_eq!(config.max_stream_bytes, 20_000_000);
@@ -482,14 +522,17 @@ mod tests {
     }
 
     #[test]
-    fn test_env_overrides_ignore_unparseable_values() {
+    fn test_env_overrides_reject_unparseable_values() {
         let mut config = Config::default();
         let get = lookup(&[
             ("DS_SERVER__PORT", "not-a-number"),
             ("DS_LIMITS__MAX_MEMORY_BYTES", ""),
             ("DS_SERVER__LONG_POLL_TIMEOUT_SECS", "abc"),
         ]);
-        config.apply_env_overrides(&get);
+        let err = config
+            .apply_env_overrides(&get)
+            .expect_err("invalid env override should fail");
+        assert_eq!(err, "invalid DS_SERVER__PORT value");
         assert_eq!(config.port, 4437);
         assert_eq!(config.max_memory_bytes, 100 * 1024 * 1024);
         assert_eq!(config.long_poll_timeout, Duration::from_secs(30));
@@ -499,7 +542,7 @@ mod tests {
     fn test_env_overrides_partial() {
         let mut config = Config::default();
         let get = lookup(&[("DS_SERVER__PORT", "9090")]);
-        config.apply_env_overrides(&get);
+        config.apply_env_overrides(&get).expect("apply env overrides");
         assert_eq!(config.port, 9090);
         // Everything else stays at defaults
         assert_eq!(config.storage_mode, StorageMode::Memory);
@@ -536,10 +579,10 @@ mod tests {
 
         fs::write(
             config_dir.join("local.toml"),
-            r#"
+            r"
                 [server]
                 port = 8888
-            "#,
+            ",
         )
         .expect("write local.toml");
 
@@ -609,8 +652,10 @@ mod tests {
 
     #[test]
     fn test_validate_tls_pair_rejects_partial_configuration() {
-        let mut config = Config::default();
-        config.tls_cert_path = Some("/tmp/cert.pem".to_string());
+        let mut config = Config {
+            tls_cert_path: Some("/tmp/cert.pem".to_string()),
+            ..Config::default()
+        };
         assert!(config.validate().is_err());
 
         config.tls_cert_path = None;
@@ -621,38 +666,82 @@ mod tests {
     #[test]
     fn test_storage_mode_aliases() {
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__MODE", "acid")]));
+        config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__MODE", "acid")]))
+            .expect("apply env overrides");
         assert_eq!(config.storage_mode, StorageMode::Acid);
 
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__MODE", "redb")]));
+        config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__MODE", "redb")]))
+            .expect("apply env overrides");
         assert_eq!(config.storage_mode, StorageMode::Acid);
     }
 
     #[test]
     fn test_acid_shard_count_valid_values() {
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "1")]));
+        config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "1")]))
+            .expect("apply env overrides");
         assert_eq!(config.acid_shard_count, 1);
 
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "256")]));
+        config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "256")]))
+            .expect("apply env overrides");
         assert_eq!(config.acid_shard_count, 256);
     }
 
     #[test]
-    fn test_acid_shard_count_invalid_values_keep_default() {
+    fn test_acid_shard_count_invalid_values_return_error() {
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "0")]));
+        let err = config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "0")]))
+            .expect_err("invalid shard count should fail");
+        assert_eq!(
+            err,
+            "invalid DS_STORAGE__ACID_SHARD_COUNT value: '0' (must be power-of-two in 1..=256)"
+        );
         assert_eq!(config.acid_shard_count, 16);
 
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "3")]));
+        let err = config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "3")]))
+            .expect_err("invalid shard count should fail");
+        assert_eq!(
+            err,
+            "invalid DS_STORAGE__ACID_SHARD_COUNT value: '3' (must be power-of-two in 1..=256)"
+        );
         assert_eq!(config.acid_shard_count, 16);
 
         let mut config = Config::default();
-        config.apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "abc")]));
+        let err = config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__ACID_SHARD_COUNT", "abc")]))
+            .expect_err("invalid shard count should fail");
+        assert_eq!(err, "invalid DS_STORAGE__ACID_SHARD_COUNT value");
         assert_eq!(config.acid_shard_count, 16);
+    }
+
+    #[test]
+    fn test_env_overrides_reject_invalid_storage_mode() {
+        let mut config = Config::default();
+        let err = config
+            .apply_env_overrides(&lookup(&[("DS_STORAGE__MODE", "memroy")]))
+            .expect_err("invalid storage mode should fail");
+        assert_eq!(err, "invalid DS_STORAGE__MODE value: 'memroy'");
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_cors_origins() {
+        let config = Config {
+            cors_origins: "https://good.example, ,https://other.example".to_string(),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.validate().expect_err("invalid cors origins should fail"),
+            "http.cors_origins contains an empty origin entry"
+        );
     }
 
     #[test]

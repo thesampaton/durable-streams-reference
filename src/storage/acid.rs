@@ -1183,7 +1183,7 @@ mod tests {
         assert!(!restored.exists("expiring"));
         assert!(matches!(
             restored.read("expiring", &Offset::start()),
-            Err(Error::NotFound(_)) | Err(Error::StreamExpired)
+            Err(Error::NotFound(_) | Error::StreamExpired)
         ));
     }
 

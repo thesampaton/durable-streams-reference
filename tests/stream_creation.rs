@@ -503,7 +503,7 @@ async fn test_head_includes_ttl_metadata() {
         .unwrap();
 
     // TTL should be close to 7200 (within a second or two)
-    assert!(ttl >= 7198 && ttl <= 7200, "TTL should be close to 7200");
+    assert!((7198..=7200).contains(&ttl), "TTL should be close to 7200");
 
     // Should have Stream-Expires-At
     assert!(response.headers().get("Stream-Expires-At").is_some());

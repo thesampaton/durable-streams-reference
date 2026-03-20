@@ -431,7 +431,7 @@ async fn test_long_poll_204_includes_correct_headers() {
 
 /// Validates spec: 03-read-modes.md#long-poll-mode
 ///
-/// Long-poll response includes all standard read headers (ETag, etc.)
+/// Long-poll response includes all standard read headers (`ETag`, etc.)
 /// when returning data.
 #[tokio::test]
 async fn test_long_poll_200_includes_all_read_headers() {

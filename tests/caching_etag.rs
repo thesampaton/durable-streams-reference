@@ -4,7 +4,7 @@ use common::{spawn_test_server, test_client, unique_stream_name};
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag format with start sentinel (-1) offset.
+/// Verifies `ETag` format with start sentinel (-1) offset.
 #[tokio::test]
 async fn test_etag_format_start_sentinel() {
     let (base_url, _port) = spawn_test_server().await;
@@ -56,7 +56,7 @@ async fn test_etag_format_start_sentinel() {
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag format with now sentinel offset.
+/// Verifies `ETag` format with now sentinel offset.
 #[tokio::test]
 async fn test_etag_format_now_sentinel() {
     let (base_url, _port) = spawn_test_server().await;
@@ -103,7 +103,7 @@ async fn test_etag_format_now_sentinel() {
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag format with specific hex offset.
+/// Verifies `ETag` format with specific hex offset.
 #[tokio::test]
 async fn test_etag_format_specific_offset() {
     let (base_url, _port) = spawn_test_server().await;
@@ -164,7 +164,7 @@ async fn test_etag_format_specific_offset() {
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag includes :c suffix for closed stream at tail.
+/// Verifies `ETag` includes :c suffix for closed stream at tail.
 #[tokio::test]
 async fn test_etag_closed_stream_at_tail() {
     let (base_url, _port) = spawn_test_server().await;
@@ -433,7 +433,7 @@ async fn test_if_none_match_non_matching_returns_200() {
 
 /// Validates spec: 07-caching-etag.md#if-none-match
 ///
-/// Verifies that stale ETag returns 200 when new data has been appended.
+/// Verifies that stale `ETag` returns 200 when new data has been appended.
 #[tokio::test]
 async fn test_stale_etag_returns_200_after_append() {
     let (base_url, _port) = spawn_test_server().await;
@@ -567,7 +567,7 @@ async fn test_cache_control_on_error() {
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag changes when new data is appended.
+/// Verifies `ETag` changes when new data is appended.
 #[tokio::test]
 async fn test_etag_changes_after_append() {
     let (base_url, _port) = spawn_test_server().await;
@@ -629,7 +629,7 @@ async fn test_etag_changes_after_append() {
 
 /// Validates spec: 07-caching-etag.md#if-none-match
 ///
-/// Verifies 304 works correctly for closed stream with :c ETag.
+/// Verifies 304 works correctly for closed stream with :c `ETag`.
 #[tokio::test]
 async fn test_304_with_closed_stream_etag() {
     let (base_url, _port) = spawn_test_server().await;
@@ -685,7 +685,7 @@ async fn test_304_with_closed_stream_etag() {
 
 /// Validates spec: 07-caching-etag.md#format
 ///
-/// Verifies ETag on empty stream read (at tail with no messages).
+/// Verifies `ETag` on empty stream read (at tail with no messages).
 #[tokio::test]
 async fn test_etag_on_empty_stream() {
     let (base_url, _port) = spawn_test_server().await;

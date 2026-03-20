@@ -100,6 +100,6 @@ mod tests {
         // Typical values: read_seq up to ~67M, byte_offset up to 10MB
         let offset = Offset::new(67_000_000, 10_485_760);
         let cursor: u64 = generate(&offset).parse().unwrap();
-        assert!(cursor <= (1_u64 << 53) - 1);
+        assert!(cursor < (1_u64 << 53));
     }
 }

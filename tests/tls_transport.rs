@@ -100,8 +100,10 @@ async fn test_https_health_check_with_custom_ca() {
 
 #[test]
 fn test_tls_config_validation_requires_pair() {
-    let mut config = Config::default();
-    config.tls_cert_path = Some(CERT_PATH.to_string());
+    let mut config = Config {
+        tls_cert_path: Some(CERT_PATH.to_string()),
+        ..Config::default()
+    };
     assert!(config.validate().is_err());
 
     config.tls_cert_path = None;

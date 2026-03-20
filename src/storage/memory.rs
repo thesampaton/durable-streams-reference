@@ -577,7 +577,7 @@ mod tests {
         let metadata = storage.head("test").unwrap();
         assert_eq!(
             metadata.message_count,
-            u64::try_from(num_producers * seqs_per_producer).unwrap()
+            num_producers * seqs_per_producer
         );
     }
 }
