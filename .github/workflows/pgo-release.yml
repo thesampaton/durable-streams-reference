@@ -57,7 +57,7 @@ jobs:
         with:
           name: durable-streams-pgo-release
           path: |
-            target/release/durable-streams-reference
+            target/release/durable-streams-rust-server
             /tmp/ds-pgo/merged.profdata
             /tmp/benchmark-run/benchmark-results-pgo-memory.json
             /tmp/benchmark-run/benchmark-results-pgo-file.json

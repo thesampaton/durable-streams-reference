@@ -44,7 +44,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-binary
-          path: target/debug/durable-streams-reference
+          path: target/debug/durable-streams-rust-server
 
   conformance:
     name: Protocol Conformance Tests
@@ -67,8 +67,8 @@ jobs:
 
       - name: Start server
         run: |
-          chmod +x durable-streams-reference
-          ./durable-streams-reference &
+          chmod +x durable-streams-rust-server
+          ./durable-streams-rust-server &
         env:
           DS_SERVER__LONG_POLL_TIMEOUT_SECS: '2'
           DS_SERVER__SSE_RECONNECT_INTERVAL_SECS: '5'

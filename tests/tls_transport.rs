@@ -2,7 +2,7 @@ mod common;
 
 use axum_server::{from_tcp_rustls, tls_rustls::RustlsConfig};
 use common::test_client;
-use durable_streams_reference::{config::Config, router, storage::memory::InMemoryStorage};
+use durable_streams_rust_server::{config::Config, router, storage::memory::InMemoryStorage};
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use rustls_pemfile::certs;
 use std::io::BufReader;

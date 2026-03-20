@@ -1,6 +1,6 @@
 # Decision log
 
-Implementation decisions are recorded in [`docs/decisions.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/decisions.md) in three sections: **Protocol**, **Architecture**, and **Operational**.
+Implementation decisions are recorded in [`docs/decisions.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/decisions.md) in three sections: **Protocol**, **Architecture**, and **Operational**.
 
 ## Current protocol decisions
 
@@ -39,4 +39,4 @@ Each decision in the full log includes:
 4. **Rationale:** why this choice was made
 5. **Date:** when the decision was made
 
-When ambiguous on protocol behavior, decisions reference the corresponding gap in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-reference/blob/trunk/docs/gaps.md).
+When ambiguous on protocol behavior, decisions reference the corresponding gap in [`docs/gaps.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/docs/gaps.md).

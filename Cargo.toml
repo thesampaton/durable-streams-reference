@@ -1,11 +1,11 @@
 [package]
-name = "durable-streams-reference"
+name = "durable-streams-rust-server"
 version = "0.1.1"
 edition = "2024"
-description = "Reference implementation of the Durable Streams protocol in Rust, built with axum and tokio"
+description = "Durable Streams protocol server in Rust, built with axum and tokio"
 license = "MIT"
-repository = "https://github.com/thesampaton/durable-streams-reference"
-homepage = "https://thesampaton.github.io/durable-streams-reference/"
+repository = "https://github.com/thesampaton/durable-streams-rust-server"
+homepage = "https://thesampaton.github.io/durable-streams-rust-server/"
 readme = "README.md"
 keywords = ["streaming", "event-sourcing", "durable-streams", "sse", "long-polling"]
 categories = ["web-programming::http-server", "network-programming"]
