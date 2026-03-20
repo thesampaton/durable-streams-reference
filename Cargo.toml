@@ -9,7 +9,7 @@ homepage = "https://thesampaton.github.io/durable-streams-reference/"
 readme = "README.md"
 keywords = ["streaming", "event-sourcing", "durable-streams", "sse", "long-polling"]
 categories = ["web-programming::http-server", "network-programming"]
-exclude = [".agents/", ".claude/", ".github/", "docs/", "specs/", "tests/", "scratch/", "e2e/", "scripts/", "docker-compose.yml", "Dockerfile", "Makefile", ".dockerignore"]
+exclude = [".agents/", ".claude/", ".github/", "docs/", "specs/", "scratch/", "e2e/", "scripts/", "docker-compose.yml", "Dockerfile", "Makefile", ".dockerignore"]
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
