@@ -14,7 +14,7 @@ A durable stream is an append-only log exposed over HTTP. Clients create streams
 
 This repository contains two things:
 
-1. **A protocol server** written in Rust (axum + tokio). It passes the full conformance test suite and stores streams in memory. It has no authentication, no database, and no opinions about deployment. It is the simplest correct implementation of the protocol.
+1. **A protocol server** written in Rust (axum + tokio). It passes the full conformance test suite and supports multiple storage backends (in-memory, file-based, and crash-resilient acid/redb). It has no authentication, no database dependency, and no opinions about deployment.
 
 2. **A full deployment stack** that shows how to compose the server with real infrastructure:
    - **Envoy** as a JWT auth proxy in front of the server

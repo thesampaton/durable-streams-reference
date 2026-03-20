@@ -27,7 +27,7 @@ As of 2026-02-09:
 
 ## Known Limitations
 
-- Storage is in-memory only (no persistence across restarts).
+- Default storage is in-memory. File-based (`file-fast`, `file-durable`) and crash-resilient (`acid`/redb) backends are available via `DS_STORAGE__MODE`.
 - See `docs/gaps.md` for spec ambiguities and chosen interpretations.
 
 ## Future Compatibility
