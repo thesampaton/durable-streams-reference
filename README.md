@@ -3,6 +3,8 @@
 [![CI](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/ci.yml)
 [![Conformance](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml/badge.svg?branch=trunk)](https://github.com/thesampaton/durable-streams-rust-server/actions/workflows/conformance.yml)
 
+Published crate: `durable-streams-server`. Repository: `durable-streams-rust-server`.
+
 Rust implementation of the [durable streams protocol](https://github.com/durable-streams/durable-streams), with idiomatic approaches to fulfilling the protocol specification and feature parity with the caddy implementation. This project exists to validate ai-enabled development approaches, to pressure test the durable streams approach and to document how to deliver an end to end solution with durable streams, electric sql and postgres, using the gatekeeper auth pattern.
 
 Documents https://thesampaton.github.io/durable-streams-rust-server/

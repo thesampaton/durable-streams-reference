@@ -2,11 +2,11 @@
 // Shared across many independent integration-test crates; each crate only uses
 // a subset of helpers, so items appear unused when compiled per-test target.
 
-use durable_streams_rust_server::config::{Config, StorageMode};
-use durable_streams_rust_server::protocol::error::Result;
-use durable_streams_rust_server::protocol::offset::Offset;
-use durable_streams_rust_server::protocol::producer::ProducerHeaders;
-use durable_streams_rust_server::storage::{
+use durable_streams_server::config::{Config, StorageMode};
+use durable_streams_server::protocol::error::Result;
+use durable_streams_server::protocol::offset::Offset;
+use durable_streams_server::protocol::producer::ProducerHeaders;
+use durable_streams_server::storage::{
     CreateStreamResult, CreateWithDataResult, ProducerAppendResult, ReadResult, Storage,
     StreamConfig, StreamMetadata, acid::AcidStorage, file::FileStorage, memory::InMemoryStorage,
 };
@@ -341,7 +341,7 @@ where
     let port = addr.port();
 
     // Build and spawn server
-    let app = durable_streams_rust_server::router::build_router(storage, &config);
+    let app = durable_streams_server::router::build_router(storage, &config);
 
     tokio::spawn(async move {
         axum::serve(listener, app)
