@@ -127,6 +127,17 @@ curl -i -X DELETE http://localhost:4437/v1/stream/my-stream
 HTTP/1.1 204 No Content
 ```
 
+## Persistent storage
+
+The quickstart uses in-memory storage (the default). For persistence, set `DS_STORAGE__MODE`:
+
+```bash
+# Crash-resilient storage using redb
+DS_STORAGE__MODE=acid DS_STORAGE__DATA_DIR=./data cargo run
+```
+
+Available modes: `memory`, `file-fast`, `file-durable`, `acid` (alias: `redb`). See [Configuration](reference/configuration.md) for details.
+
 ## Next steps
 
 - [Architecture overview](architecture/overview.md) to understand the full stack

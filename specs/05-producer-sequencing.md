@@ -204,15 +204,14 @@ The server tracks per `(stream, producerId)`:
 
 ### Cleanup
 
-For in-memory stores, the server SHOULD use a 7-day TTL on producer state,
-cleaning up stale entries on stream access. After state expiry, the producer
-is treated as new.
+The server SHOULD use a 7-day TTL on producer state, cleaning up stale
+entries on stream access. After state expiry, the producer is treated as new.
 
 ## Concurrency
 
 The server MUST serialize validation and append per `(stream, producerId)` pair.
-For in-memory storage, holding the per-stream write lock during both validation
-and append satisfies this requirement.
+Holding the per-stream write lock during both validation and append satisfies
+this requirement across all storage backends.
 
 ## Conformance
 

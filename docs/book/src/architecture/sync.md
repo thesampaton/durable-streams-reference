@@ -1,6 +1,6 @@
 # Sync layer
 
-The DS server stores streams in memory. For durable storage and SQL querying, you need a sync layer that bridges DS streams and a database bidirectionally.
+The DS server supports multiple storage backends (memory, file, acid/redb). For SQL querying and cross-service visibility, you need a sync layer that bridges DS streams and a database bidirectionally.
 
 ## The pattern
 

@@ -17,6 +17,25 @@ cargo run
 
 The server listens on `http://localhost:4437` with streams at `/v1/stream/`.
 
+## Storage backends
+
+The default storage mode is in-memory. For persistence, choose a backend via `DS_STORAGE__MODE`:
+
+| Mode | Durability | Use case |
+|------|-----------|----------|
+| `memory` | None (lost on restart) | Development, testing, buffer in front of sync layer |
+| `file-fast` | Buffered writes | Low-latency persistence where occasional data loss is acceptable |
+| `file-durable` | Fsynced writes | Durable persistence without external dependencies |
+| `acid` (alias: `redb`) | Crash-resilient (redb) | Production workloads requiring ACID guarantees |
+
+```bash
+# Run with durable file storage
+DS_STORAGE__MODE=file-durable DS_STORAGE__DATA_DIR=./data cargo run
+
+# Run with crash-resilient acid storage
+DS_STORAGE__MODE=acid DS_STORAGE__DATA_DIR=./data cargo run
+```
+
 ## Build and test
 
 ```bash

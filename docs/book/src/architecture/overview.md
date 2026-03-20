@@ -22,9 +22,9 @@ The full deployment has five components. Each solves one problem and composes cl
 
 | Component | Problem it solves |
 |-----------|-------------------|
-| **DS server** | Real-time append-only log with SSE, offset resumption, and producer idempotency. Stores streams in memory, delivers data fast. |
+| **DS server** | Real-time append-only log with SSE, offset resumption, and producer idempotency. Configurable storage (memory, file, acid/redb). |
 | **Envoy proxy** | JWT authentication. The DS server has no auth, so Envoy validates tokens and forwards the `sub` claim as `X-JWT-Sub`. |
-| **Postgres** | Durable storage. Streams in memory survive as long as the server runs; Postgres survives restarts. |
+| **Postgres** | Durable storage and SQL querying. Even with persistent storage modes, Postgres provides structured access, analytics, and cross-service visibility. |
 | **Electric SQL** | Change data capture. Reads the Postgres WAL and exposes a Shape API that delivers table changes as a stream. |
 | **Sync service** | Bidirectional bridge. Forwards Postgres changes into DS streams (PG-to-Stream) and DS stream events into Postgres (Stream-to-PG). |
 
@@ -51,7 +51,7 @@ A client appends a session event (chat message, presence update) to a DS stream.
 The architecture is composable. Each piece can be replaced independently:
 
 - **Auth proxy:** Envoy is one option. Any reverse proxy that validates JWTs and forwards claims works (nginx, Caddy, cloud load balancers).
-- **Storage:** The DS server uses in-memory storage. A persistent backend (Redis, SQLite, Postgres-backed) could replace it without changing the protocol.
+- **Storage:** The DS server supports in-memory, file-based, and acid (redb) storage backends, configurable via `DS_STORAGE__MODE`.
 - **Sync layer:** Electric SQL is the reference CDC tool. Any WAL reader (Debezium, custom logical replication) could feed the sync service.
 - **Database:** Postgres is used here because Electric requires it. The sync service pattern works with any database that supports change notifications.
 

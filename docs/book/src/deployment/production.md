@@ -51,7 +51,7 @@ Tune the server's memory limits for your workload:
 | `DS_LIMITS__MAX_MEMORY_BYTES` | 100 MB | Total across all streams |
 | `DS_LIMITS__MAX_STREAM_BYTES` | 10 MB | Per stream |
 
-In production with the sync layer, streams are consumed and can be deleted after sync. The in-memory store acts as a buffer, not long-term storage.
+In production with the sync layer, streams are consumed and can be deleted after sync. When using the default in-memory mode, the store acts as a buffer, not long-term storage. For persistence without the sync layer, use `file-durable` or `acid` mode.
 
 ## Monitoring
 

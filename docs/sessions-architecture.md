@@ -38,7 +38,7 @@ Neither direction is optional:
 
 ### DS server
 
-The protocol server. Stores streams in memory, delivers data via HTTP GET
+The protocol server. Stores streams using a configurable backend (memory, file, or acid/redb), delivers data via HTTP GET
 (catch-up), long-poll, or SSE. Does not understand session semantics — it
 treats all payloads as opaque bytes (or opaque JSON objects for JSON-mode
 streams).
@@ -301,8 +301,8 @@ docker-compose --profile sync down
 This harness is a local development and testing tool. For production:
 
 - **Auth:** Replace the test JWKS with a real identity provider.
-- **Persistence:** The DS server stores streams in memory. For durability
-  beyond the Stream→PG sync, consider a persistent storage backend.
+- **Persistence:** The DS server defaults to in-memory storage. For durability
+  beyond the Stream→PG sync, use `file-durable` or `acid` storage mode via `DS_STORAGE__MODE`.
 - **Electric config:** Pin the Electric SQL version and configure
   replication slots carefully. See `docs/ecosystem-interop.md` CI-004.
 - **Sync service resilience:** The sync service should track its SSE
