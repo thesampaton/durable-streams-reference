@@ -20,7 +20,7 @@ jobs:
     name: Build mdbook
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install mdbook
         run: |
@@ -33,7 +33,7 @@ jobs:
         run: mdbook build docs/book
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: docs/book/book
 
