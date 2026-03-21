@@ -1,6 +1,6 @@
 # Read Modes
 
-Version: 3.0.0
+Version: 3.1.0
 Status: stable
 
 ## Overview
@@ -339,8 +339,9 @@ Stream-Closed: true
 
 ### Event Types
 
-**`event: data`** - Emitted for each stored message
-- One data event per message in the stream
+**`event: data`** - Carries stream message data
+- For text and binary streams: one data event per message
+- For JSON streams (`application/json`): all messages from a single read MUST be batched into one data event containing a single JSON array (emitting separate per-message arrays produces invalid JSON on concatenation)
 - For binary streams (content type not `text/*` or `application/json`): payload is base64-encoded per RFC 4648
 - For text and JSON streams: payload is UTF-8 text
 
@@ -355,8 +356,9 @@ Stream-Closed: true
 
 The server MUST:
 - Return `Content-Type: text/event-stream`
-- Emit one `event: data` per stored message
-- Emit `event: control` after each batch of data events
+- For non-JSON streams: emit one `event: data` per stored message
+- For JSON streams: batch all messages from a single read into one `event: data` containing a single JSON array
+- Emit one `event: control` after each batch of data events (1:1 data:control per read)
 - Include `streamNextOffset` in every control event
 - Include `streamCursor` in control events when stream is open
 - Include `upToDate: true` when client has caught up
@@ -467,3 +469,4 @@ This spec covers conformance test blocks:
 |-----------|----------------|------------------|
 | Long-poll timeout value not specified | Default 30s, configurable via env var | Reasonable default; allows tuning without code changes |
 | SSE idle close timing (~60s) | Default 60s, configurable via `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` env var, 0 disables | Spec says SHOULD with ~60s; configurable allows tuning |
+| SSE JSON batching (MAY vs MUST) | Treat as MUST for JSON mode — batch all messages from a read into one data event | Per-message arrays produce invalid JSON (`[a][b]`). See `docs/gaps.md`, [durable-streams#262](https://github.com/durable-streams/durable-streams/issues/262) |
