@@ -259,9 +259,10 @@ fn build_sse_byte_stream<S: Storage + 'static>(
     async_stream::stream! {
         let read_result = initial_read;
 
-        // Emit initial data + control
-        for msg in &read_result.messages {
-            yield Ok(sse::format_data_frame(msg, is_binary, is_json));
+        // Emit initial data + control (JSON messages batched into one event)
+        let data_frames = sse::format_data_frames(&read_result.messages, is_binary, is_json);
+        if !data_frames.is_empty() {
+            yield Ok(data_frames);
         }
 
         let control = build_sse_control(&read_result);
@@ -293,8 +294,9 @@ fn build_sse_byte_stream<S: Storage + 'static>(
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             // Channel closed — final read + emit + end
                             if let Ok(rr) = storage.read(&name, &tail_offset) {
-                                for msg in &rr.messages {
-                                    yield Ok(sse::format_data_frame(msg, is_binary, is_json));
+                                let data_frames = sse::format_data_frames(&rr.messages, is_binary, is_json);
+                                if !data_frames.is_empty() {
+                                    yield Ok(data_frames);
                                 }
                                 let ctrl = build_sse_control(&rr);
                                 yield Ok(sse::format_control_frame(&ctrl));
@@ -324,8 +326,9 @@ fn build_sse_byte_stream<S: Storage + 'static>(
                 return;
             };
 
-            for msg in &rr.messages {
-                yield Ok(sse::format_data_frame(msg, is_binary, is_json));
+            let data_frames = sse::format_data_frames(&rr.messages, is_binary, is_json);
+            if !data_frames.is_empty() {
+                yield Ok(data_frames);
             }
 
             let ctrl = build_sse_control(&rr);

@@ -48,8 +48,11 @@ pub fn format_control_frame(payload: &ControlPayload) -> String {
 /// Format an `event: data` SSE frame for a single stored message.
 ///
 /// If the stream content type is binary (per `is_binary_content_type`),
-/// the data is base64-encoded. For JSON content types, each message is
+/// the data is base64-encoded. For JSON content types, the message is
 /// wrapped in a JSON array. Otherwise it's sent as UTF-8 text.
+///
+/// For JSON streams with multiple messages from a single read, prefer
+/// `format_data_frames` which batches them into a single SSE event.
 ///
 /// Multi-line data is split across multiple `data:` lines per the SSE spec.
 /// All line ending forms (`\r\n`, `\r`, `\n`) are treated as boundaries to
@@ -69,11 +72,53 @@ pub fn format_data_frame(data: &Bytes, is_binary: bool, is_json: bool) -> String
         String::from_utf8_lossy(data).into_owned()
     };
 
+    format_raw_data_frame(&text)
+}
+
+/// Format `event: data` SSE frames for a batch of messages from a single read.
+///
+/// For JSON streams, all messages are batched into a single `event: data` frame
+/// containing one JSON array — maintaining the 1:1 data-to-control relationship
+/// the spec requires (PROTOCOL.md §5.8). Without batching, the client would
+/// concatenate separate `[...][...]` arrays, producing invalid JSON.
+///
+/// For binary/text streams, each message gets its own `event: data` frame.
+///
+/// Returns an empty string if `messages` is empty.
+#[must_use]
+pub fn format_data_frames(messages: &[Bytes], is_binary: bool, is_json: bool) -> String {
+    if messages.is_empty() {
+        return String::new();
+    }
+
+    if is_json {
+        // Batch all messages into a single JSON array in one event: data frame
+        let mut array_content = String::new();
+        for (i, msg) in messages.iter().enumerate() {
+            if i > 0 {
+                array_content.push(',');
+            }
+            let raw = String::from_utf8_lossy(msg);
+            array_content.push_str(&raw);
+        }
+        let text = format!("[{array_content}]");
+        format_raw_data_frame(&text)
+    } else {
+        let mut result = String::new();
+        for msg in messages {
+            result.push_str(&format_data_frame(msg, is_binary, false));
+        }
+        result
+    }
+}
+
+/// Format a raw text payload as an `event: data` SSE frame.
+///
+/// Splits on all line-ending forms (`\r\n`, `\r`, `\n`) to prevent CRLF
+/// injection — each segment gets its own `data:` prefix.
+fn format_raw_data_frame(text: &str) -> String {
     let mut frame = String::from("event: data\n");
-    // Split on all line-ending forms (\r\n, \r, \n) to prevent CRLF injection.
-    // Each segment gets its own `data:` prefix so embedded newlines can't
-    // break out of the data field and inject fake SSE events.
-    for line in split_lines(&text) {
+    for line in split_lines(text) {
         frame.push_str("data:");
         frame.push_str(line);
         frame.push('\n');
@@ -292,5 +337,51 @@ mod tests {
         // Consecutive line endings produce empty segments
         assert_eq!(split_lines("a\n\nb"), vec!["a", "", "b"]);
         assert_eq!(split_lines("a\r\rb"), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn test_format_data_frames_json_batches_into_single_event() {
+        let messages = vec![
+            Bytes::from(r#"{"id":1}"#),
+            Bytes::from(r#"{"id":2}"#),
+            Bytes::from(r#"{"id":3}"#),
+        ];
+        let frame = format_data_frames(&messages, false, true);
+        // Should produce exactly one `event: data` with all messages in one array
+        assert_eq!(
+            frame.matches("event: data").count(),
+            1,
+            "JSON batch should produce exactly one SSE data event"
+        );
+        assert!(
+            frame.contains(r#"data:[{"id":1},{"id":2},{"id":3}]"#),
+            "JSON batch should contain all messages in one array"
+        );
+    }
+
+    #[test]
+    fn test_format_data_frames_json_single_message() {
+        let messages = vec![Bytes::from(r#"{"id":1}"#)];
+        let frame = format_data_frames(&messages, false, true);
+        assert_eq!(frame.matches("event: data").count(), 1);
+        assert!(frame.contains(r#"data:[{"id":1}]"#));
+    }
+
+    #[test]
+    fn test_format_data_frames_text_emits_per_message() {
+        let messages = vec![Bytes::from("hello"), Bytes::from("world")];
+        let frame = format_data_frames(&messages, false, false);
+        // Non-JSON should produce one event: data per message
+        assert_eq!(
+            frame.matches("event: data").count(),
+            2,
+            "Text batch should produce one SSE data event per message"
+        );
+    }
+
+    #[test]
+    fn test_format_data_frames_empty() {
+        let result = format_data_frames(&[], false, true);
+        assert!(result.is_empty());
     }
 }

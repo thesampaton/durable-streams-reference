@@ -9,6 +9,7 @@ conservative, and what test would clarify it.
 | Ambiguity | Interpretation | Why Conservative | Clarifying Test | Date |
 |-----------|----------------|------------------|-----------------|------|
 | SSE idle close timing (~60s) | Default 60s, configurable via `DS_SERVER__SSE_RECONNECT_INTERVAL_SECS` env var (0 disables) | Spec says SHOULD close roughly every ~60s. Configurable allows tuning without code changes. Not adding fixed timing that can't be adjusted. | Conformance test that verifies SSE connections close within a window (e.g., 50-70s) after reaching idle at tail | 2026-02-07 |
+| SSE JSON batching: MAY vs MUST | Batch all JSON messages from a single read into one `event: data` array, then one `event: control` | PROTOCOL.md §5.8 says batching MAY be used for JSON, but emitting separate per-message arrays produces invalid JSON when concatenated (`[a][b]`). Two independent implementations (JS reference + this Rust server) both got this wrong — strong evidence the spec language is a correctness trap, not an optimization hint. Batching is treated as MUST for JSON mode. | Conformance test: append 2+ JSON messages, read via `live=sse`, assert single `event: data` containing one JSON array with all messages. See [durable-streams#262](https://github.com/durable-streams/durable-streams/issues/262) | 2026-03-21 |
 
 ## Gap Entry Format
 
