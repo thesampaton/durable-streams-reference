@@ -82,7 +82,7 @@ The latest benchmark matrix findings are in
 
 ## Conformance
 
-This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.2`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md).
+This implementation targets full conformance with [`@durable-streams/server-conformance-tests@0.2.3`](https://www.npmjs.com/package/@durable-streams/server-conformance-tests) against spec commit [`a347312`](https://github.com/durable-streams/durable-streams/blob/a347312a47ae510a4a2e3ee7a121d6c8d7d74e50/PROTOCOL.md).
 
 Run conformance tests locally:
 
@@ -91,7 +91,7 @@ DS_SERVER__LONG_POLL_TIMEOUT_SECS=2 DS_SERVER__SSE_RECONNECT_INTERVAL_SECS=5 car
 
 cd /tmp/conformance-run
 npm init -y
-npm install @durable-streams/server-conformance-tests@0.2.2
+npm install @durable-streams/server-conformance-tests@0.2.3
 cat > conformance.test.mjs << 'EOF'
 import { runConformanceTests } from "@durable-streams/server-conformance-tests";
 runConformanceTests({ baseUrl: process.env.CONFORMANCE_TEST_URL, longPollTimeoutMs: 2000 });
