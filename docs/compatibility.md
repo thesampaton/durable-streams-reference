@@ -16,7 +16,7 @@ and any behaviour differences or breaking changes.
 
 **Spec SHA:** a347312a47ae510a4a2e3ee7a121d6c8d7d74e50
 
-**Conformance Version:** 0.2.2
+**Conformance Version:** 0.2.3
 
 **Status:** Fully conformant. All 239 conformance tests pass.
 
