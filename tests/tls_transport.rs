@@ -1,14 +1,13 @@
 mod common;
 
-use axum_server::{from_tcp_rustls, tls_rustls::RustlsConfig};
+use axum_server::{Handle, tls_rustls::RustlsConfig};
 use common::test_client;
 use durable_streams_server::{config::Config, router, storage::memory::InMemoryStorage};
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use rustls_pemfile::certs;
 use std::io::BufReader;
-use std::net::TcpListener;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -19,37 +18,30 @@ const CA_CERT_PATH: &str = "e2e/fixtures/ds-ca-cert.pem";
 
 /// Spawn a TLS test server on a random port, returning the port number.
 async fn spawn_tls_server() -> u16 {
-    let std_listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind test tls server");
-    let port = std_listener
-        .local_addr()
-        .expect("Failed to get local addr")
-        .port();
-
     let storage = Arc::new(InMemoryStorage::new(100 * 1024 * 1024, 10 * 1024 * 1024));
     let app = router::build_router(storage, &Config::default());
     let tls = RustlsConfig::from_pem_file(CERT_PATH, KEY_PATH)
         .await
         .expect("failed to build rustls config");
 
+    let handle = Handle::new();
+    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+    let server_handle = handle.clone();
     tokio::spawn(async move {
-        from_tcp_rustls(std_listener, tls)
+        axum_server::bind_rustls(addr, tls)
+            .handle(server_handle)
             .serve(app.into_make_service())
             .await
             .expect("TLS test server failed");
     });
 
-    port
-}
-
-/// Wait for the TLS server to accept connections by retrying TCP connect.
-async fn wait_for_tls_ready(port: u16) {
-    for _ in 0..50 {
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("TLS server on port {port} did not become ready within 1s");
+    // Wait for the server to bind and report its listening address.
+    let listening = handle
+        .listening()
+        .await
+        .expect("server never reported listening address");
+    listening.port()
 }
 
 async fn tls_raw_get_health(port: u16) -> std::io::Result<String> {
@@ -89,7 +81,6 @@ async fn tls_raw_get_health(port: u16) -> std::io::Result<String> {
 #[tokio::test]
 async fn test_https_health_check_with_custom_ca() {
     let port = spawn_tls_server().await;
-    wait_for_tls_ready(port).await;
 
     let raw = tls_raw_get_health(port)
         .await
@@ -114,7 +105,6 @@ fn test_tls_config_validation_requires_pair() {
 #[tokio::test]
 async fn test_http_client_fails_against_https_endpoint() {
     let port = spawn_tls_server().await;
-    wait_for_tls_ready(port).await;
 
     let err = test_client()
         .get(format!("http://127.0.0.1:{port}/healthz"))
