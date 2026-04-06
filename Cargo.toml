@@ -1,6 +1,6 @@
 [package]
 name = "durable-streams-server"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Durable Streams protocol server in Rust, built with axum and tokio"
 license = "MIT"
