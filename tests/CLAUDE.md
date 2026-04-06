@@ -45,7 +45,7 @@ scaffolding. The external conformance suite is the ultimate acceptance gate.
 
 ### External Conformance Suite (ultimate gate)
 
-- `@durable-streams/server-conformance-tests@0.2.2` on npm (239 tests).
+- `@durable-streams/server-conformance-tests@0.2.3` on npm (239 tests).
 - These are the acceptance tests. If we pass all of these, we conform.
 - Run with `make conformance` or `npx @durable-streams/server-conformance-tests`.
 - Our Rust integration tests exist to provide faster feedback during development.
