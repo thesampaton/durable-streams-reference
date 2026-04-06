@@ -322,7 +322,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
- "tokio-test",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -1149,9 +1148,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "redb"
-version = "3.1.1"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef99362319c782aa4639ad3a306b64c3bb90e12874e99b8df124cb679d988611"
+checksum = "67f7f231ea7b1172b7ac00ccf96b1250f0fb5a16d5585836aa4ebc997df7cbde"
 dependencies = [
  "libc",
 ]
@@ -1643,28 +1642,6 @@ checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

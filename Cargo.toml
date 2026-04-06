@@ -33,13 +33,12 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 async-stream = "0.3.6"
 futures-util = "0.3.32"
-redb = "3"
+redb = "4"
 seahash = "4.1.0"
 figment = { version = "0.10.19", features = ["toml"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12.28", features = ["stream"] }
-tokio-test = "0.4.5"
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2.2"
