@@ -8,6 +8,7 @@ use rustls_pemfile::certs;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -37,9 +38,9 @@ async fn spawn_tls_server() -> u16 {
     });
 
     // Wait for the server to bind and report its listening address.
-    let listening = handle
-        .listening()
+    let listening = tokio::time::timeout(Duration::from_secs(5), handle.listening())
         .await
+        .expect("TLS server did not start listening within 5s")
         .expect("server never reported listening address");
     listening.port()
 }
