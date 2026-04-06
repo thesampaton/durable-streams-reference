@@ -1,7 +1,7 @@
 /target
 .idea/
 *.iml
-.claude/settings.local.json
+.claude/
 e2e/node_modules/
 .dev/
 docs/book/book/
