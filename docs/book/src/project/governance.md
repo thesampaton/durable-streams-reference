@@ -20,7 +20,7 @@ This implementation strictly adheres to the durable streams protocol specificati
 The protocol spec is pinned by git commit SHA, not by branch. The conformance test suite is pinned by npm package version. See [`SPEC_VERSION.md`](https://github.com/thesampaton/durable-streams-rust-server/blob/trunk/SPEC_VERSION.md) for current pins:
 
 - **Spec SHA:** `a347312a47ae510a4a2e3ee7a121d6c8d7d74e50`
-- **Conformance:** `@durable-streams/server-conformance-tests@0.2.2`
+- **Conformance:** `@durable-streams/server-conformance-tests@0.2.3`
 
 ## Traceability
 
